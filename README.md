@@ -2,14 +2,6 @@
 
 A real-time cryptocurrency price monitoring web application built with Python, Streamlit, and Plotly. Features OHLC (Open, High, Low, Close) candlestick charts similar to professional trading platforms.
 
-## Features
-
-- 📊 **Real-time OHLC Charts**: Interactive candlestick charts
-- ⏱️ **Multiple Timeframes**: 1m, 3m, 5m, 15m, 1h, 4h, 1d
-- 💰 **Multiple Cryptocurrencies**: BTC, ETH, SOL (easily expandable to more)
-- 🔄 **Auto-refresh**: Automatic data updates every 30 seconds
-- 📱 **Responsive Design**: Works on desktop and mobile devices
-- 🎨 **Professional UI**: Dark theme with intuitive controls
 
 ## Default Cryptocurrencies
 
@@ -51,25 +43,7 @@ A real-time cryptocurrency price monitoring web application built with Python, S
 
 5. **Open your browser** and navigate to `http://localhost:8501`
 
-## Usage
 
-### Interface Overview
-- **Sidebar**: Select cryptocurrencies, timeframes, and refresh settings
-- **Price Summary**: Quick overview with current prices and 24h changes
-- **OHLC Charts**: Professional candlestick charts
-- **Data Tables**: Raw OHLC data for detailed analysis
-
-### Controls
-- **Cryptocurrency Selection**: Choose which cryptos to monitor
-- **Timeframe Selection**: Select chart timeframe (1m to 1d)
-- **Auto-refresh**: Toggle automatic updates every 30 seconds
-- **Manual Refresh**: Force refresh all data immediately
-
-### Chart Features
-- Green candles for price increases
-- Red candles for price decreases
-- Interactive zoom and pan
-- Hover tooltips with OHLC values
 
 ## Data Source
 
@@ -78,7 +52,6 @@ A real-time cryptocurrency price monitoring web application built with Python, S
 - **Data Quality**: Professional-grade OHLC data
 - **Rate Limiting**: Built-in to respect API limits
 
-## Extending the App
 
 ### Adding New Cryptocurrencies
 
@@ -161,6 +134,10 @@ MIT License - Feel free to modify and distribute.
 - Technical indicators (MA, RSI, MACD)
 - Price alerts and notifications
 - Portfolio tracking
+- Historical data analysis
+- More exchange integrations
+- Mobile app version
+
 - Historical data analysis
 - More exchange integrations
 - Mobile app version
