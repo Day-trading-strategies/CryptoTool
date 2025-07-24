@@ -117,27 +117,11 @@ self.timeframes = {
 - **"Unable to load chart"**: Data fetching problem
 - **Empty charts**: No data available for selected timeframe
 
-## License
-
-MIT License - Feel free to modify and distribute.
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
-
 ## Future Enhancements
 
 - Technical indicators (MA, RSI, MACD)
 - Price alerts and notifications
 - Portfolio tracking
-- Historical data analysis
-- More exchange integrations
-- Mobile app version
-
 - Historical data analysis
 - More exchange integrations
 - Mobile app version
