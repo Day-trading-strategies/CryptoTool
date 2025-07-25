@@ -10,6 +10,7 @@ AVAILABLE_CRYPTOS = {
     'SOL': 'SOL/USDT'
 }
 
+
 # Available timeframes
 TIMEFRAMES = {
     '1m': '1m',
@@ -21,8 +22,15 @@ TIMEFRAMES = {
     '1d': '1d'
 }
 
+# Indicators that do not overlay on top of price chart.
+SEPARATE_AX_INDICATORS ={
+    "RSI",
+    "William % Range",
+    "KDJ"
+}
+
 # Chart settings
-CHART_HEIGHT = 600
+CHART_HEIGHT = 700
 CACHE_TTL_OHLC = 120  # seconds
 CACHE_TTL_PRICE = 60  # seconds
 AUTO_REFRESH_INTERVAL = 10  # seconds
