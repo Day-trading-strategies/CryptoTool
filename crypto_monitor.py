@@ -1,7 +1,9 @@
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import plotly.express as px
 import pandas as pd
+import ta
 import requests
 import time
 from datetime import datetime, timedelta
@@ -30,6 +32,8 @@ class CryptoPriceMonitor:
         # Timeframe mapping (from config)
         self.timeframes = TIMEFRAMES
     
+        self.separate_ax_indicators = SEPARATE_AX_INDICATORS
+
     @st.cache_data(ttl=CACHE_TTL_OHLC, show_spinner=False)  # Hide spinner
     def fetch_ohlc_data(_self, symbol, timeframe, limit=100):
         """Fetch OHLC data from exchange"""
@@ -57,17 +61,59 @@ class CryptoPriceMonitor:
         except Exception as e:
             # Silently return None to prevent UI disruption
             return None, None
-    
-    def create_ohlc_chart(self, df, symbol, timeframe):
+
+    # returns changed dataframe with new data 'half_trend' that will be used to creating half trend indicator
+    def calculate_half_trend(self, df, period=10, multiplier=1):
+        # Half Trend calculation based on ATR
+        hl2 = (df['high'] + df['low']) / 2
+        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range()
+        # Initialize with first True Range
+        ht = [hl2.iloc[0]]
+        trend = True  # True=uptrend, False=downtrend
+        for i in range(1, len(df)):
+            delta = atr.iloc[i] * multiplier
+            prev_ht = ht[-1]
+            if hl2.iloc[i] > prev_ht + delta:
+                ht.append(prev_ht + delta)
+                trend = True
+            elif hl2.iloc[i] < prev_ht - delta:
+                ht.append(prev_ht - delta)
+                trend = False
+            else:
+                ht.append(prev_ht)
+        df['half_trend'] = ht
+
+        return df
+
+    def create_ohlc_chart(self, df, symbol, timeframe, indicators, params):
         """Create OHLC candlestick chart"""
         if df is None or df.empty:
             return None
         
+        # Compute Half Trend if selected
+        if 'Half Trend' in indicators:
+            df = self.calculate_half_trend(df, period=params['Half Trend']['period'],
+                                           multiplier=params['Half Trend']['multiplier'])
+
+
+        sep_inds = []
+        for ind in indicators:
+            if ind in self.separate_ax_indicators:
+                sep_inds.append(ind)
+
+        # Changes height of chart as more indicators are added.
+        n_rows = 1 + len(sep_inds)
+        weights      = [3] + [1] * len(sep_inds)
+        total_weight = sum(weights)
+        row_heights  = [w/total_weight for w in weights]
+
         fig = make_subplots(
-            rows=1, cols=1,
+            rows=n_rows, cols=1,
+            shared_xaxes = True,
+            vertical_spacing=0.02,
+            row_heights = row_heights,
             subplot_titles=(f'{symbol} Price Chart ({timeframe})',)
         )
-        
         # Candlestick chart
         fig.add_trace(
             go.Candlestick(
@@ -84,11 +130,147 @@ class CryptoPriceMonitor:
             ),
             row=1, col=1
         )
+        fig.update_yaxes(title_text='Price (USDT)', row=1, col=1)
+
+        # Plot Half Trend
+        if 'Half Trend' in indicators:
+            fig.add_trace(
+                go.Scatter(
+                    x=df['timestamp'], 
+                    y=df['half_trend'],
+                    mode='lines', 
+                    name='Half Trend',
+                    line=dict(width=1)
+                ), row=1, col=1
+            )
+
+        # Bollinger Band
+        if "Bollinger Band" in indicators:
+            w = params['Bollinger Band']['window']
+            dev = params['Bollinger Band']['window_dev']
+            bb = ta.volatility.BollingerBands(close=df["close"], window=w, window_dev=dev)
+
+            df["bb_middle"] = bb.bollinger_mavg()
+            df["bb_upper"]  = bb.bollinger_hband()
+            df["bb_lower"]  = bb.bollinger_lband()
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["bb_middle"],
+                    mode="lines",
+                    line=dict(color="rgba(255,0,0,1)", width=1),
+                    opacity = 0.6,
+                    name="BB Middle (20)"
+                ),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["bb_upper"],
+                    mode="lines",
+                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+                    name="BB Upper (20,+2σ)",
+                    hovertemplate="Upper: %{y:.2f}<extra></extra>"
+                ),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["bb_lower"],
+                    mode="lines",
+                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+                    name="BB Lower (20,−2σ)",
+                    hovertemplate="Lower: %{y:.2f}<extra></extra>"
+                ),
+                row=1, col=1
+            )
+        
+        for idx, ind in enumerate(sep_inds, start=2):
+
+            # RSI Chart
+            if ind == "RSI":
+                w = params['RSI']['window']
+                df["rsi"] = (ta.momentum.RSIIndicator(df["close"], window=w).rsi())
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['timestamp'],
+                        y=df['rsi'],
+                        mode='lines',
+                        line=dict(width=1),
+                        name='RSI (14)',
+                        hovertemplate='RSI: %{y:.1f}<extra></extra>'
+                    ),
+                    row=idx, col=1
+                )
+                fig.update_yaxes(title_text='RSI', row=idx, col=1)
+
+            # William % Range chart
+            if ind == "William % Range":
+                lbp = params['William % Range']['lbp']
+                df["WR"] = (ta.momentum.williams_r(df["high"], df["low"], df["close"], lbp=lbp))
+
+                fig.add_trace(
+                    go.Scatter(
+                        x=df['timestamp'],
+                        y=df['WR'],
+                        mode='lines',
+                        line=dict(width=1),
+                        name='William % Range (14)',
+                        hovertemplate='%{y:.1f}<extra></extra>'
+                    ),
+                    row=idx, col=1
+                )
+                fig.update_yaxes(title_text='Williams % Range', row=idx, col=1)
+                
+            # KDJ chart
+            if ind == "KDJ":
+                period = params['KDJ']['period']
+                signal = params['KDJ']['signal']
+                stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"], window=period, smooth_window=signal)
+                df['%K'] = stoch.stoch()
+                df['%D'] = stoch.stoch_signal()
+                df['%J'] = 3 * df['%K'] - 2 * df['%D']
+
+                fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["%K"],
+                    mode="lines",
+                    line=dict(color="rgba(255,0,0,1)", width=1),
+                    opacity = 0.6,
+                    name="K (20)"
+                ),
+                row=idx, col=1
+                ) 
+                fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["%D"],
+                    mode="lines",
+                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+                    name="D",
+                ),
+                row=idx, col=1
+                )
+                fig.add_trace(
+                go.Scatter(
+                    x=df["timestamp"],
+                    y=df["%J"],
+                    mode="lines",
+                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+                    name="J",
+                ),
+                row=idx, col=1
+                )
+                fig.update_yaxes(title_text='KDJ', row=idx, col=1)
         
         # Update layout
         fig.update_layout(
             title=f'{symbol} - {timeframe} Chart',
-            yaxis_title='Price (USDT)',
             xaxis_rangeslider_visible=False,
             height=CHART_HEIGHT,
             showlegend=False,
@@ -141,7 +323,12 @@ def main():
         options=list(monitor.available_cryptos.keys()),
         default=default_cryptos
     )
-    
+    #indicator selection
+    st.sidebar.subheader("Indicator")
+    selected_indicator = st.sidebar.multiselect(
+        "Select Indicator:",
+        options=["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
+    )
     # Timeframe selection
     st.sidebar.subheader("Timeframe")
     selected_timeframe = st.sidebar.selectbox(
@@ -154,7 +341,40 @@ def main():
     if st.sidebar.button("🔄 Refresh Now"):
         st.cache_data.clear()
         st.rerun()
-    
+
+    st.sidebar.markdown("---")
+
+    # Indicator Parameters that appear when indicator is selected
+    indicator_params = {}
+
+    if "RSI" in selected_indicator:
+        indicator_params["RSI"] = {
+            "window": st.sidebar.number_input("RSI window", 2, 100, 14, key="RSI_w")
+        }
+
+    if "Bollinger Band" in selected_indicator:
+        indicator_params["Bollinger Band"] = {
+            "window":     st.sidebar.number_input("BB window", 2, 100, 20, key="BB_w"),
+            "window_dev": st.sidebar.slider("BB σ-dev", 1.0, 4.0, 2.0, 0.1, key="BB_d")
+        }
+
+    if "KDJ" in selected_indicator:
+        indicator_params["KDJ"] = {
+            "period": st.sidebar.number_input("KDJ period", 2, 100, 14, key="KDJ_p"),
+            "signal": st.sidebar.number_input("KDJ signal", 1, 10, 3, key="KDJ_s"),
+        }
+
+    if "William % Range" in selected_indicator:
+        indicator_params["William % Range"] = {
+            "lbp": st.sidebar.number_input("William %R window", 2, 100, 14, key="WR_w")
+        }
+
+    if "Half Trend RMA" in selected_indicator:
+        indicator_params["Half Trend"] = {
+            "period":     st.sidebar.number_input("HT ATR period", 2, 50, 10, key="HT_p"),
+            "multiplier": st.sidebar.slider("HT multiplier", 0.1, 3.0, 1.0, 0.1, key="HT_m")
+        }
+
     if not selected_cryptos:
         st.warning("Please select at least one cryptocurrency to monitor.")
         return
@@ -177,7 +397,7 @@ def main():
                 df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[selected_timeframe])
                 
                 if df is not None:
-                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe)
+                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params)
                     if fig:
                         st.plotly_chart(
                             fig, 
@@ -213,14 +433,18 @@ def main():
         symbol = monitor.available_cryptos[crypto]
         df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[selected_timeframe])
         
+        # if able to load coin price data.
         if df is not None:
-            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe)
+            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator)
             if fig:
                 st.plotly_chart(
                     fig, 
                     use_container_width=True,
                     config={
                         'displayModeBar': True,
+                        'modeBarButtonsToAdd': [
+                            ['drawrect']
+                        ],
                         'scrollZoom': True,  # Enable mouse scroll zoom
                         'doubleClick': 'reset',  # Double-click to reset zoom
                         'showTips': False,
@@ -236,6 +460,7 @@ def main():
                             'zoomOut2d',      # Remove zoom out button
                             'autoScale2d'     # Remove auto scale button
                         ]
+                        
                     }
                 )
                 
@@ -247,6 +472,7 @@ def main():
     
     # Footer
     st.markdown("---")
+    
     st.markdown(
         """
         <div style='text-align: center; color: #666; font-size: 12px;'>
@@ -255,6 +481,7 @@ def main():
         """, 
         unsafe_allow_html=True
     )
+    
     
     # Auto-refresh functionality (always enabled)
     time.sleep(AUTO_REFRESH_INTERVAL)
