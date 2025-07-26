@@ -91,7 +91,7 @@ class CryptoPriceMonitor:
 
         return df
 
-    def create_ohlc_chart(self, df, symbol, timeframe, indicators, params, highlighted_timestamps=None):
+    def create_ohlc_chart(self, df, symbol, timeframe, indicators, params, highlighted_timestamps=None, chart_position=None):
         """Create OHLC candlestick chart"""
         if df is None or df.empty:
             return None
@@ -342,8 +342,38 @@ class CryptoPriceMonitor:
             dragmode='pan'  # Set pan as default drag mode in layout
         )
         
-        # Auto-pan chart based on highlighted timestamps
-        if highlighted_timestamps:
+        # Auto-pan chart based on highlighted timestamps or navigation position
+        if chart_position is not None:
+            # Use navigation position (chart_position is an index into the dataframe)
+            if 0 <= chart_position < len(df):
+                end_time = df.iloc[chart_position]['timestamp']
+                
+                # Calculate time window based on timeframe (show about 60 candles before position)
+                timeframe_minutes = {
+                    '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+                    '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440
+                }
+                
+                # Get minutes for current timeframe, default to 60 if not found
+                tf_minutes = timeframe_minutes.get(timeframe, 60)
+                
+                # Show approximately 60 candles worth of data before the position
+                time_window_minutes = tf_minutes * 60
+                start_time = end_time - pd.Timedelta(minutes=time_window_minutes)
+                
+                # Ensure start_time is not before our data range
+                data_start = df['timestamp'].min()
+                if start_time < data_start:
+                    start_time = data_start
+                
+                # Set the x-axis range to focus on the navigation position
+                fig.update_layout(
+                    xaxis=dict(
+                        range=[start_time, end_time],
+                        type='date'
+                    )
+                )
+        elif highlighted_timestamps:
             # Find the latest highlighted timestamp
             latest_highlight = max(highlighted_timestamps)
             
@@ -506,7 +536,14 @@ def main():
                     highlight_key = f"highlighted_candles_{crypto}"
                     highlighted_timestamps = st.session_state.get(highlight_key, [])
                     
-                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps)
+                    # Chart navigation state
+                    nav_key = f"chart_nav_{crypto}"
+                    if nav_key not in st.session_state:
+                        st.session_state[nav_key] = len(df) - 1  # Start at the most recent candlestick
+                    
+                    current_position = st.session_state[nav_key]
+                    
+                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, current_position)
                     if fig:
                         # Show current highlights
                         if highlighted_timestamps:
@@ -529,7 +566,7 @@ def main():
                         st.plotly_chart(
                             fig, 
                             use_container_width=True,
-                            key=f"chart_{crypto}_{idx}_{len(highlighted_timestamps)}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
+                            key=f"chart_{crypto}_{idx}_{len(highlighted_timestamps)}_{current_position}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
                             config={
                                 'displayModeBar': True,
                                 'scrollZoom': True,  # Enable mouse scroll zoom
@@ -549,6 +586,32 @@ def main():
                                 ]
                             }
                         )
+                        
+                        # Chart Navigation Controls
+                        st.markdown("**📊 Chart Navigation:**")
+                        nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
+                        
+                        with nav_col1:
+                            if st.button("⬅️ Back", key=f"nav_back_{crypto}_{idx}"):
+                                if current_position > 0:
+                                    st.session_state[nav_key] = current_position - 1
+                                    st.rerun()
+                        
+                        with nav_col2:
+                            if st.button("➡️ Forward", key=f"nav_forward_{crypto}_{idx}"):
+                                if current_position < len(df) - 1:
+                                    st.session_state[nav_key] = current_position + 1
+                                    st.rerun()
+                        
+                        with nav_col3:
+                            # Show current position info
+                            current_candle = df.iloc[current_position]
+                            st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                        
+                        with nav_col4:
+                            if st.button("🏠 Latest", key=f"nav_latest_{crypto}_{idx}"):
+                                st.session_state[nav_key] = len(df) - 1
+                                st.rerun()
                         
                         # Show dropdown interface for highlighting
                         st.markdown("**🎯 Highlight Candlesticks:**")
@@ -634,7 +697,14 @@ def main():
             highlight_key = f"highlighted_candles_{crypto}"
             highlighted_timestamps = st.session_state.get(highlight_key, [])
             
-            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps)
+            # Chart navigation state
+            nav_key = f"chart_nav_{crypto}"
+            if nav_key not in st.session_state:
+                st.session_state[nav_key] = len(df) - 1  # Start at the most recent candlestick
+            
+            current_position = st.session_state[nav_key]
+            
+            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, current_position)
             if fig:
                 # Show current highlights
                 if highlighted_timestamps:
@@ -657,7 +727,7 @@ def main():
                 st.plotly_chart(
                     fig, 
                     use_container_width=True,
-                    key=f"chart_{crypto}_{len(highlighted_timestamps)}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
+                    key=f"chart_{crypto}_{len(highlighted_timestamps)}_{current_position}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
                     config={
                         'displayModeBar': True,
                         'modeBarButtonsToAdd': [
@@ -681,6 +751,32 @@ def main():
                         
                     }
                 )
+                
+                # Chart Navigation Controls
+                st.markdown("### 📊 Chart Navigation")
+                nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
+                
+                with nav_col1:
+                    if st.button("⬅️ Back", key=f"nav_back_{crypto}"):
+                        if current_position > 0:
+                            st.session_state[nav_key] = current_position - 1
+                            st.rerun()
+                
+                with nav_col2:
+                    if st.button("➡️ Forward", key=f"nav_forward_{crypto}"):
+                        if current_position < len(df) - 1:
+                            st.session_state[nav_key] = current_position + 1
+                            st.rerun()
+                
+                with nav_col3:
+                    # Show current position info
+                    current_candle = df.iloc[current_position]
+                    st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                with nav_col4:
+                    if st.button("🏠 Latest", key=f"nav_latest_{crypto}"):
+                        st.session_state[nav_key] = len(df) - 1
+                        st.rerun()
                 
                 # Highlighting interface
                 st.markdown("### 🎯 Highlight Candlesticks")
