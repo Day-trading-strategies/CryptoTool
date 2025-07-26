@@ -91,7 +91,7 @@ class CryptoPriceMonitor:
 
         return df
 
-    def create_ohlc_chart(self, df, symbol, timeframe, indicators, params, highlighted_indices=None):
+    def create_ohlc_chart(self, df, symbol, timeframe, indicators, params, highlighted_timestamps=None):
         """Create OHLC candlestick chart"""
         if df is None or df.empty:
             return None
@@ -137,14 +137,42 @@ class CryptoPriceMonitor:
             row=1, col=1
         )
         
-        # Add highlighting overlays using scatter markers
-        if highlighted_indices:
-            for idx in highlighted_indices:
-                if 0 <= idx < len(df):
-                    candle = df.iloc[idx]
+        # Add highlighting overlays using scatter markers based on timestamps
+        if highlighted_timestamps:
+            price_range = df['high'].max() - df['low'].min()
+            for timestamp in highlighted_timestamps:
+                # Find the row with matching timestamp
+                matching_rows = df[df['timestamp'] == timestamp]
+                
+                # If exact match not found, find the closest earlier timestamp
+                if matching_rows.empty:
+                    # Find all timestamps that are earlier than or equal to the target
+                    earlier_timestamps = df[df['timestamp'] <= timestamp]['timestamp']
+                    if not earlier_timestamps.empty:
+                        # Get the latest (closest) timestamp that's still earlier
+                        closest_timestamp = earlier_timestamps.max()
+                        matching_rows = df[df['timestamp'] == closest_timestamp]
+                        is_approximate = True
+                    else:
+                        # If no earlier timestamp found, skip this highlight
+                        continue
+                else:
+                    is_approximate = False
+                
+                if not matching_rows.empty:
+                    candle = matching_rows.iloc[0]
                     # Add a star marker slightly above the highlighted candlestick
-                    price_range = df['high'].max() - df['low'].min()
                     star_y = candle['high'] + (price_range * 0.05)  # 5% above high
+                    
+                    # Different colors for exact vs approximate matches
+                    if is_approximate:
+                        star_color = '#FFA500'  # Orange for approximate matches
+                        border_color = '#FF6347'  # Tomato border
+                        hover_suffix = f'<br><i>Approximate match (closest earlier)</i>'
+                    else:
+                        star_color = '#FFD700'  # Gold for exact matches
+                        border_color = '#FF8C00'  # Orange border
+                        hover_suffix = ''
                     
                     fig.add_trace(
                         go.Scatter(
@@ -154,12 +182,12 @@ class CryptoPriceMonitor:
                             marker=dict(
                                 symbol='star',
                                 size=20,
-                                color='#FFD700',  # Gold
-                                line=dict(width=2, color='#FF8C00')  # Orange border
+                                color=star_color,
+                                line=dict(width=2, color=border_color)
                             ),
-                            name=f'Highlight #{idx}',
+                            name=f'Highlight {timestamp.strftime("%H:%M:%S")}',
                             showlegend=False,
-                            hovertext=f'Highlighted Candlestick #{idx}<br>High: ${candle["high"]:.4f}<br>Close: ${candle["close"]:.4f}'
+                            hovertext=f'Highlighted Candlestick<br>Target: {timestamp.strftime("%Y-%m-%d %H:%M:%S")}<br>Actual: {candle["timestamp"].strftime("%Y-%m-%d %H:%M:%S")}<br>High: ${candle["high"]:.4f}<br>Close: ${candle["close"]:.4f}{hover_suffix}'
                         ),
                         row=1, col=1
                     )
@@ -314,6 +342,44 @@ class CryptoPriceMonitor:
             dragmode='pan'  # Set pan as default drag mode in layout
         )
         
+        # Auto-pan chart based on highlighted timestamps
+        if highlighted_timestamps:
+            # Find the latest highlighted timestamp
+            latest_highlight = max(highlighted_timestamps)
+            
+            # Find the actual timestamp to use (exact match or closest earlier)
+            matching_rows = df[df['timestamp'] == latest_highlight]
+            if matching_rows.empty:
+                # Find closest earlier timestamp
+                earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
+                if not earlier_timestamps.empty:
+                    end_time = earlier_timestamps.max()
+                else:
+                    end_time = latest_highlight
+            else:
+                end_time = latest_highlight
+            
+            # Calculate time window based on timeframe (show about 50-80 candles before highlight)
+            timeframe_minutes = {
+                '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+                '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440
+            }
+            
+            # Get minutes for current timeframe, default to 60 if not found
+            tf_minutes = timeframe_minutes.get(timeframe, 60)
+            
+            # Show approximately 60 candles worth of data before the highlight
+            time_window_minutes = tf_minutes * 60
+            start_time = end_time - pd.Timedelta(minutes=time_window_minutes)
+            
+            # Set the x-axis range to focus on the highlighted area
+            fig.update_layout(
+                xaxis=dict(
+                    range=[start_time, end_time],
+                    type='date'
+                )
+            )
+        
         # Update axes
         fig.update_xaxes(gridcolor='#2d3748', showgrid=True)
         fig.update_yaxes(gridcolor='#2d3748', showgrid=True)
@@ -431,15 +497,29 @@ def main():
                 df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[selected_timeframe])
                 
                 if df is not None:
-                    # Get highlighted candlesticks for this crypto
+                    # Get highlighted candlesticks for this crypto (using timestamps)
                     highlight_key = f"highlighted_candles_{crypto}"
-                    highlighted_indices = st.session_state.get(highlight_key, [])
+                    highlighted_timestamps = st.session_state.get(highlight_key, [])
                     
-                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_indices)
+                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps)
                     if fig:
                         # Show current highlights
-                        if highlighted_indices:
-                            st.info(f"💫 Currently highlighted: {sorted(highlighted_indices)}")
+                        if highlighted_timestamps:
+                            highlight_info = []
+                            for ts in highlighted_timestamps:
+                                # Check if we have an exact match or need approximation
+                                exact_match = df[df['timestamp'] == ts]
+                                if not exact_match.empty:
+                                    highlight_info.append(f"{ts.strftime('%H:%M:%S')}")
+                                else:
+                                    # Find closest earlier timestamp
+                                    earlier_timestamps = df[df['timestamp'] <= ts]['timestamp']
+                                    if not earlier_timestamps.empty:
+                                        closest_timestamp = earlier_timestamps.max()
+                                        highlight_info.append(f"{ts.strftime('%H:%M:%S')}→{closest_timestamp.strftime('%H:%M:%S')}")
+                            st.info(f"💫 Currently highlighted: {sorted(highlight_info)}")
+                            if any('→' in info for info in highlight_info):
+                                st.caption("🔶 Orange stars show approximate matches (closest earlier time)")
                         
                         st.plotly_chart(
                             fig, 
@@ -468,7 +548,7 @@ def main():
                         st.markdown("**🎯 Highlight Candlesticks:**")
                         
                         # Create a date/time picker for choosing candlestick to highlight
-                        col1, col2, col3 = st.columns([2, 1, 1])
+                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
                         
                         with col1:
                             # Get date range from the data
@@ -497,30 +577,38 @@ def main():
                                     key=f"time_{crypto}_{idx}"
                                 )
                                 
-                                # Find the corresponding index
+                                # Find the corresponding timestamp
                                 selected_datetime = pd.Timestamp.combine(selected_date, selected_time)
-                                try:
-                                    selected_index = df[df['timestamp'] == selected_datetime].index[0]
-                                    st.info(f"Selected: {selected_datetime.strftime('%Y-%m-%d %H:%M:%S')} (Index: {selected_index})")
-                                except IndexError:
-                                    selected_index = None
+                                # Check if this timestamp exists in the data
+                                matching_rows = df[df['timestamp'] == selected_datetime]
+                                if not matching_rows.empty:
+                                    st.info(f"Selected: {selected_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+                                    selected_timestamp = selected_datetime
+                                else:
+                                    selected_timestamp = None
                                     st.warning("No candlestick found for selected date/time")
                             else:
-                                selected_index = None
+                                selected_timestamp = None
                                 st.warning("No data available for selected date")
                         
                         with col2:
                             if st.button("⭐ Highlight", key=f"highlight_{crypto}_{idx}"):
-                                if selected_index is not None and selected_index not in highlighted_indices:
-                                    highlighted_indices.append(selected_index)
-                                    st.session_state[highlight_key] = highlighted_indices
+                                if selected_timestamp is not None and selected_timestamp not in highlighted_timestamps:
+                                    highlighted_timestamps.append(selected_timestamp)
+                                    st.session_state[highlight_key] = highlighted_timestamps
                                     st.rerun()
                         
                         with col3:
                             if st.button("❌ Remove", key=f"remove_{crypto}_{idx}"):
-                                if selected_index is not None and selected_index in highlighted_indices:
-                                    highlighted_indices.remove(selected_index)
-                                    st.session_state[highlight_key] = highlighted_indices
+                                if selected_timestamp is not None and selected_timestamp in highlighted_timestamps:
+                                    highlighted_timestamps.remove(selected_timestamp)
+                                    st.session_state[highlight_key] = highlighted_timestamps
+                                    st.rerun()
+                        
+                        with col4:
+                            if st.button("🗑️ Clear All", key=f"clear_all_{crypto}_{idx}"):
+                                if highlighted_timestamps:
+                                    st.session_state[highlight_key] = []
                                     st.rerun()
                         
                         # Display data table
@@ -536,15 +624,29 @@ def main():
         
         # if able to load coin price data.
         if df is not None:
-            # Get highlighted candlesticks for this crypto
+            # Get highlighted candlesticks for this crypto (using timestamps)
             highlight_key = f"highlighted_candles_{crypto}"
-            highlighted_indices = st.session_state.get(highlight_key, [])
+            highlighted_timestamps = st.session_state.get(highlight_key, [])
             
-            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_indices)
+            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps)
             if fig:
                 # Show current highlights
-                if highlighted_indices:
-                    st.info(f"💫 Currently highlighted: {sorted(highlighted_indices)}")
+                if highlighted_timestamps:
+                    highlight_info = []
+                    for ts in highlighted_timestamps:
+                        # Check if we have an exact match or need approximation
+                        exact_match = df[df['timestamp'] == ts]
+                        if not exact_match.empty:
+                            highlight_info.append(f"{ts.strftime('%H:%M:%S')}")
+                        else:
+                            # Find closest earlier timestamp
+                            earlier_timestamps = df[df['timestamp'] <= ts]['timestamp']
+                            if not earlier_timestamps.empty:
+                                closest_timestamp = earlier_timestamps.max()
+                                highlight_info.append(f"{ts.strftime('%H:%M:%S')}→{closest_timestamp.strftime('%H:%M:%S')}")
+                    st.info(f"💫 Currently highlighted: {sorted(highlight_info)}")
+                    if any('→' in info for info in highlight_info):
+                        st.caption("🔶 Orange stars show approximate matches (closest earlier time)")
                 
                 st.plotly_chart(
                     fig, 
@@ -575,7 +677,7 @@ def main():
                 
                 # Highlighting interface
                 st.markdown("### 🎯 Highlight Candlesticks")
-                col1, col2, col3 = st.columns([3, 1, 1])
+                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                 
                 with col1:
                     # Get date range from the data
@@ -602,41 +704,58 @@ def main():
                             key=f"time_single_{crypto}"
                         )
                         
-                        # Find the corresponding index
+                        # Find the corresponding timestamp
                         selected_datetime = pd.Timestamp.combine(selected_date, selected_time)
-                        try:
-                            selected_index = df[df['timestamp'] == selected_datetime].index[0]
-                            st.info(f"Selected: {selected_datetime.strftime('%Y-%m-%d %H:%M:%S')} (Index: {selected_index})")
-                        except IndexError:
-                            selected_index = None
+                        # Check if this timestamp exists in the data
+                        matching_rows = df[df['timestamp'] == selected_datetime]
+                        if not matching_rows.empty:
+                            st.info(f"Selected: {selected_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+                            selected_timestamp = selected_datetime
+                        else:
+                            selected_timestamp = None
                             st.warning("No candlestick found for selected date/time")
                     else:
-                        selected_index = None
+                        selected_timestamp = None
                         st.warning("No data available for selected date")
                 
                 with col2:
                     if st.button("⭐ Highlight", key=f"highlight_btn_{crypto}"):
-                        if selected_index is not None:
+                        if selected_timestamp is not None:
                             if f"highlighted_candles_{crypto}" not in st.session_state:
                                 st.session_state[f"highlighted_candles_{crypto}"] = []
-                            if selected_index not in st.session_state[f"highlighted_candles_{crypto}"]:
-                                st.session_state[f"highlighted_candles_{crypto}"].append(selected_index)
+                            if selected_timestamp not in st.session_state[f"highlighted_candles_{crypto}"]:
+                                st.session_state[f"highlighted_candles_{crypto}"].append(selected_timestamp)
                                 st.rerun()
                 
                 with col3:
                     if st.button("🗑️ Remove", key=f"remove_btn_{crypto}"):
-                        if selected_index is not None:
+                        if selected_timestamp is not None:
                             if f"highlighted_candles_{crypto}" in st.session_state:
-                                if selected_index in st.session_state[f"highlighted_candles_{crypto}"]:
-                                    st.session_state[f"highlighted_candles_{crypto}"].remove(selected_index)
+                                if selected_timestamp in st.session_state[f"highlighted_candles_{crypto}"]:
+                                    st.session_state[f"highlighted_candles_{crypto}"].remove(selected_timestamp)
                                     st.rerun()
+                
+                with col4:
+                    if st.button("🗑️ Clear All", key=f"clear_all_btn_{crypto}"):
+                        if f"highlighted_candles_{crypto}" in st.session_state:
+                            if st.session_state[f"highlighted_candles_{crypto}"]:
+                                st.session_state[f"highlighted_candles_{crypto}"] = []
+                                st.rerun()
                 
                 # Display current highlights
                 if f"highlighted_candles_{crypto}" in st.session_state and st.session_state[f"highlighted_candles_{crypto}"]:
-                    highlighted_info = [
-                        f"Index {idx}: {df.iloc[idx]['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} - Close: ${df.iloc[idx]['close']:.2f}"
-                        for idx in st.session_state[f"highlighted_candles_{crypto}"]
-                    ]
+                    highlighted_info = []
+                    for timestamp in st.session_state[f"highlighted_candles_{crypto}"]:
+                        # Find the corresponding row in current data
+                        matching_rows = df[df['timestamp'] == timestamp]
+                        if not matching_rows.empty:
+                            candle_data = matching_rows.iloc[0]
+                            highlighted_info.append(
+                                f"Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S')} - Close: ${candle_data['close']:.2f}"
+                            )
+                        else:
+                            highlighted_info.append(f"Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S')} - (Data not available)")
+                    
                     st.info(f"Currently highlighted: {', '.join(highlighted_info)}")
                 
                 # Display data table
