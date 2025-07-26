@@ -372,6 +372,11 @@ class CryptoPriceMonitor:
             time_window_minutes = tf_minutes * 60
             start_time = end_time - pd.Timedelta(minutes=time_window_minutes)
             
+            # Ensure start_time is not before our data range
+            data_start = df['timestamp'].min()
+            if start_time < data_start:
+                start_time = data_start
+            
             # Set the x-axis range to focus on the highlighted area
             fig.update_layout(
                 xaxis=dict(
@@ -524,6 +529,7 @@ def main():
                         st.plotly_chart(
                             fig, 
                             use_container_width=True,
+                            key=f"chart_{crypto}_{idx}_{len(highlighted_timestamps)}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
                             config={
                                 'displayModeBar': True,
                                 'scrollZoom': True,  # Enable mouse scroll zoom
@@ -651,6 +657,7 @@ def main():
                 st.plotly_chart(
                     fig, 
                     use_container_width=True,
+                    key=f"chart_{crypto}_{len(highlighted_timestamps)}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
                     config={
                         'displayModeBar': True,
                         'modeBarButtonsToAdd': [
