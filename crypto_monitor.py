@@ -361,7 +361,7 @@ class CryptoPriceMonitor:
             dragmode='pan'  # Set pan as default drag mode in layout
         )
         
-        # Auto-pan chart based on highlighted timestamps or navigation position
+        # Auto-pan chart based on navigation position (takes priority) or highlighted timestamps
         if chart_position is not None:
             # Use navigation position (chart_position is an index into the dataframe)
             if 0 <= chart_position < len(df):
@@ -393,20 +393,21 @@ class CryptoPriceMonitor:
                     )
                 )
         elif highlighted_timestamps:
-            # Find the latest highlighted timestamp
+            # Only use highlight positioning if no navigation position is set
+            # Find the latest highlighted timestamp and resolve it to actual chart data
             latest_highlight = max(highlighted_timestamps)
             
             # Find the actual timestamp to use (exact match or closest earlier)
             matching_rows = df[df['timestamp'] == latest_highlight]
             if matching_rows.empty:
-                # Find closest earlier timestamp
+                # Find closest earlier timestamp (this is what actually gets displayed)
                 earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
                 if not earlier_timestamps.empty:
-                    end_time = earlier_timestamps.max()
+                    end_time = earlier_timestamps.max()  # Use the actual candle timestamp
                 else:
-                    end_time = latest_highlight
+                    end_time = latest_highlight  # Fallback to original if no earlier found
             else:
-                end_time = latest_highlight
+                end_time = latest_highlight  # Exact match found
             
             # Calculate time window based on timeframe (show about 50-80 candles before highlight)
             timeframe_minutes = {
@@ -557,13 +558,84 @@ def main():
                     
                     # Chart navigation state
                     nav_key = f"chart_nav_{crypto}"
+                    timeframe_key = f"timeframe_{crypto}"
+                    
+                    # Check if timeframe has changed
+                    previous_timeframe = st.session_state.get(timeframe_key, None)
+                    current_timeframe = selected_timeframe
+                    timeframe_changed = previous_timeframe != current_timeframe
+                    
+                    if timeframe_changed:
+                        # Reset navigation to latest when timeframe changes
+                        st.session_state[nav_key] = len(df) - 1
+                        st.session_state[timeframe_key] = current_timeframe
+                    
                     if nav_key not in st.session_state:
                         st.session_state[nav_key] = len(df) - 1  # Start at the most recent candlestick
                     
-                    current_position = st.session_state[nav_key]
+                    current_position = int(st.session_state[nav_key])
                     
-                    # Determine chart position - use navigation only if no highlights are active
-                    chart_pos = None if highlighted_timestamps else current_position
+                    # Check if we should auto-pan to a new highlight
+                    should_auto_pan_to_highlight = False
+                    navigation_was_updated = False
+                    if highlighted_timestamps and not timeframe_changed:  # Don't auto-pan if timeframe just changed
+                        # Check if this is a new highlight by comparing with previous state
+                        prev_highlights_key = f"prev_highlighted_candles_{crypto}"
+                        prev_highlights = st.session_state.get(prev_highlights_key, [])
+                        
+                        # If we have new highlights, auto-pan to the latest one
+                        if len(highlighted_timestamps) > len(prev_highlights):
+                            # Find the latest highlighted timestamp and set navigation position to it
+                            latest_highlight = max(highlighted_timestamps)
+                            
+                            # Find the closest matching row in the dataframe (exact or closest earlier)
+                            matching_rows = df[df['timestamp'] == latest_highlight]
+                            if matching_rows.empty:
+                                # Find closest earlier timestamp - this is what actually gets displayed
+                                earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
+                                if not earlier_timestamps.empty:
+                                    closest_timestamp = earlier_timestamps.max()
+                                    matching_rows = df[df['timestamp'] == closest_timestamp]
+                            
+                            if not matching_rows.empty:
+                                # Update navigation position to the highlighted candlestick (using actual displayed timestamp)
+                                # Find the position of the actual displayed timestamp in the current dataframe
+                                actual_timestamp = matching_rows.iloc[0]['timestamp']
+                                # Find where this actual timestamp appears in the current dataframe
+                                position_rows = df[df['timestamp'] == actual_timestamp]
+                                if not position_rows.empty:
+                                    highlight_position = int(position_rows.index[0])
+                                    st.session_state[nav_key] = highlight_position
+                                    current_position = highlight_position
+                                    navigation_was_updated = True
+                            
+                            # Update the previous highlights state
+                            st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
+                    elif highlighted_timestamps and timeframe_changed:
+                        # When timeframe changes and we have highlights, find the highlighted position in new timeframe
+                        latest_highlight = max(highlighted_timestamps)
+                        
+                        # Find the closest matching row in the new timeframe dataframe
+                        matching_rows = df[df['timestamp'] == latest_highlight]
+                        if matching_rows.empty:
+                            # Find closest earlier timestamp
+                            earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
+                            if not earlier_timestamps.empty:
+                                closest_timestamp = earlier_timestamps.max()
+                                matching_rows = df[df['timestamp'] == closest_timestamp]
+                        
+                        if not matching_rows.empty:
+                            # Update navigation position to the highlighted candlestick in new timeframe
+                            actual_timestamp = matching_rows.iloc[0]['timestamp']
+                            position_rows = df[df['timestamp'] == actual_timestamp]
+                            if not position_rows.empty:
+                                highlight_position = position_rows.index[0]
+                                st.session_state[nav_key] = highlight_position
+                                current_position = highlight_position
+                                navigation_was_updated = True
+                    
+                    # Always use navigation position when available, especially after updates
+                    chart_pos = current_position  # Always use navigation position for consistent behavior
                     
                     fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, chart_pos)
                     if fig:
@@ -591,14 +663,14 @@ def main():
                         nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
                         
                         with nav_col1:
-                            nav_back_disabled = current_position <= 0
+                            nav_back_disabled = bool(current_position <= 0)
                             if st.button("⬅️ Back", key=f"nav_back_{crypto}_{idx}", disabled=nav_back_disabled, use_container_width=True):
                                 if current_position > 0:
                                     st.session_state[nav_key] = current_position - 1
                                     st.rerun()
                         
                         with nav_col2:
-                            nav_forward_disabled = current_position >= len(df) - 1
+                            nav_forward_disabled = bool(current_position >= len(df) - 1)
                             if st.button("➡️ Forward", key=f"nav_forward_{crypto}_{idx}", disabled=nav_forward_disabled, use_container_width=True):
                                 if current_position < len(df) - 1:
                                     st.session_state[nav_key] = current_position + 1
@@ -610,7 +682,7 @@ def main():
                             st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
                         
                         with nav_col4:
-                            nav_latest_disabled = current_position >= len(df) - 1
+                            nav_latest_disabled = bool(current_position >= len(df) - 1)
                             if st.button("🏠 Latest", key=f"nav_latest_{crypto}_{idx}", disabled=nav_latest_disabled, use_container_width=True):
                                 st.session_state[nav_key] = len(df) - 1
                                 st.rerun()
@@ -701,12 +773,18 @@ def main():
                                 if selected_timestamp is not None and selected_timestamp in highlighted_timestamps:
                                     highlighted_timestamps.remove(selected_timestamp)
                                     st.session_state[highlight_key] = highlighted_timestamps
+                                    # Update previous highlights state to reflect removal
+                                    prev_highlights_key = f"prev_highlighted_candles_{crypto}"
+                                    st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
                                     st.rerun()
                         
                         with col4:
                             if st.button("🗑️ Clear All", key=f"clear_all_{crypto}_{idx}"):
                                 if highlighted_timestamps:
                                     st.session_state[highlight_key] = []
+                                    # Update previous highlights state to reflect clearing
+                                    prev_highlights_key = f"prev_highlighted_candles_{crypto}"
+                                    st.session_state[prev_highlights_key] = []
                                     st.rerun()
                         
                         # Display data table
@@ -728,13 +806,84 @@ def main():
             
             # Chart navigation state
             nav_key = f"chart_nav_{crypto}"
+            timeframe_key = f"timeframe_{crypto}"
+            
+            # Check if timeframe has changed
+            previous_timeframe = st.session_state.get(timeframe_key, None)
+            current_timeframe = selected_timeframe
+            timeframe_changed = previous_timeframe != current_timeframe
+            
+            if timeframe_changed:
+                # Reset navigation to latest when timeframe changes
+                st.session_state[nav_key] = len(df) - 1
+                st.session_state[timeframe_key] = current_timeframe
+            
             if nav_key not in st.session_state:
                 st.session_state[nav_key] = len(df) - 1  # Start at the most recent candlestick
             
-            current_position = st.session_state[nav_key]
+            current_position = int(st.session_state[nav_key])
             
-            # Determine chart position - use navigation only if no highlights are active
-            chart_pos = None if highlighted_timestamps else current_position
+            # Check if we should auto-pan to a new highlight
+            should_auto_pan_to_highlight = False
+            navigation_was_updated = False
+            if highlighted_timestamps and not timeframe_changed:  # Don't auto-pan if timeframe just changed
+                # Check if this is a new highlight by comparing with previous state
+                prev_highlights_key = f"prev_highlighted_candles_{crypto}"
+                prev_highlights = st.session_state.get(prev_highlights_key, [])
+                
+                # If we have new highlights, auto-pan to the latest one
+                if len(highlighted_timestamps) > len(prev_highlights):
+                    # Find the latest highlighted timestamp and set navigation position to it
+                    latest_highlight = max(highlighted_timestamps)
+                    
+                    # Find the closest matching row in the dataframe (exact or closest earlier)
+                    matching_rows = df[df['timestamp'] == latest_highlight]
+                    if matching_rows.empty:
+                        # Find closest earlier timestamp - this is what actually gets displayed
+                        earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
+                        if not earlier_timestamps.empty:
+                            closest_timestamp = earlier_timestamps.max()
+                            matching_rows = df[df['timestamp'] == closest_timestamp]
+                    
+                if not matching_rows.empty:
+                    # Update navigation position to the highlighted candlestick (using actual displayed timestamp)
+                    # Find the position of the actual displayed timestamp in the current dataframe
+                    actual_timestamp = matching_rows.iloc[0]['timestamp']
+                    # Find where this actual timestamp appears in the current dataframe
+                    position_rows = df[df['timestamp'] == actual_timestamp]
+                    if not position_rows.empty:
+                        highlight_position = int(position_rows.index[0])
+                        st.session_state[nav_key] = highlight_position
+                        current_position = highlight_position
+                        navigation_was_updated = True                    # Update the previous highlights state
+                    st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
+                else:
+                    st.write("📍 Using navigation position")
+            elif highlighted_timestamps and timeframe_changed:
+                # When timeframe changes and we have highlights, find the highlighted position in new timeframe
+                latest_highlight = max(highlighted_timestamps)
+                
+                # Find the closest matching row in the new timeframe dataframe
+                matching_rows = df[df['timestamp'] == latest_highlight]
+                if matching_rows.empty:
+                    # Find closest earlier timestamp
+                    earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
+                    if not earlier_timestamps.empty:
+                        closest_timestamp = earlier_timestamps.max()
+                        matching_rows = df[df['timestamp'] == closest_timestamp]
+                
+                if not matching_rows.empty:
+                    # Update navigation position to the highlighted candlestick in new timeframe
+                    actual_timestamp = matching_rows.iloc[0]['timestamp']
+                    position_rows = df[df['timestamp'] == actual_timestamp]
+                    if not position_rows.empty:
+                        highlight_position = int(position_rows.index[0])
+                        st.session_state[nav_key] = highlight_position
+                        current_position = highlight_position
+                        navigation_was_updated = True
+            
+            # Always use navigation position when available, especially after updates
+            chart_pos = current_position  # Always use navigation position for consistent behavior
             
             fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, chart_pos)
             if fig:
@@ -762,14 +911,14 @@ def main():
                 nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
                 
                 with nav_col1:
-                    nav_back_disabled = current_position <= 0
+                    nav_back_disabled = bool(current_position <= 0)
                     if st.button("⬅️ Back", key=f"nav_back_{crypto}", disabled=nav_back_disabled, use_container_width=True):
                         if current_position > 0:
                             st.session_state[nav_key] = current_position - 1
                             st.rerun()
                 
                 with nav_col2:
-                    nav_forward_disabled = current_position >= len(df) - 1
+                    nav_forward_disabled = bool(current_position >= len(df) - 1)
                     if st.button("➡️ Forward", key=f"nav_forward_{crypto}", disabled=nav_forward_disabled, use_container_width=True):
                         if current_position < len(df) - 1:
                             st.session_state[nav_key] = current_position + 1
@@ -781,7 +930,7 @@ def main():
                     st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 with nav_col4:
-                    nav_latest_disabled = current_position >= len(df) - 1
+                    nav_latest_disabled = bool(current_position >= len(df) - 1)
                     if st.button("🏠 Latest", key=f"nav_latest_{crypto}", disabled=nav_latest_disabled, use_container_width=True):
                         st.session_state[nav_key] = len(df) - 1
                         st.rerun()
@@ -875,6 +1024,9 @@ def main():
                             if f"highlighted_candles_{crypto}" in st.session_state:
                                 if selected_timestamp in st.session_state[f"highlighted_candles_{crypto}"]:
                                     st.session_state[f"highlighted_candles_{crypto}"].remove(selected_timestamp)
+                                    # Update previous highlights state to reflect removal
+                                    prev_highlights_key = f"prev_highlighted_candles_{crypto}"
+                                    st.session_state[prev_highlights_key] = st.session_state[f"highlighted_candles_{crypto}"].copy()
                                     st.rerun()
                 
                 with col4:
@@ -882,6 +1034,9 @@ def main():
                         if f"highlighted_candles_{crypto}" in st.session_state:
                             if st.session_state[f"highlighted_candles_{crypto}"]:
                                 st.session_state[f"highlighted_candles_{crypto}"] = []
+                                # Update previous highlights state to reflect clearing
+                                prev_highlights_key = f"prev_highlighted_candles_{crypto}"
+                                st.session_state[prev_highlights_key] = []
                                 st.rerun()
                 
                 # Display current highlights
