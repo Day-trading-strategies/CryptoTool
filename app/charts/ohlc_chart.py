@@ -3,7 +3,6 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import pandas as pd
 
-from typing import List, Optional
 from app.config import *
 
 from app.indicators.half_trend import HalfTrendIndicator
@@ -160,6 +159,18 @@ class OHLCChartCreator:
 
             self.df[crypto] = indicator.calculate(self.df[crypto])
 
-            fig = indicator.add_traces(fig, self.df[crypto], 1 if ind not in sep_inds else sep_inds.index(ind) + 2)
+            indicator.add_traces(fig, self.df[crypto], 1 if ind not in sep_inds else sep_inds.index(ind) + 2)
             
+        # Update layout
+        fig.update_layout(
+            title=f'{AVAILABLE_CRYPTOS[crypto]} - {self.timeframe} Chart',
+            xaxis_rangeslider_visible=False,
+            height=CHART_HEIGHT,
+            showlegend=False,
+            plot_bgcolor='#0e1117',
+            paper_bgcolor='#0e1117',
+            font=dict(color='white'),
+            dragmode='pan'  # Set pan as default drag mode in layout
+        )
+        
         return fig

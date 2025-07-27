@@ -1,7 +1,6 @@
 import streamlit as st
 
-from typing import List, Tuple, Dict, Any
-from config import *
+from app.config import *
 
 class Sidebar:
     """Handles sidebar controls and user input interaction"""

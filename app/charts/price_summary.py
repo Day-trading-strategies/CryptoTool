@@ -1,6 +1,6 @@
 import streamlit as st
-from typing import List
 
+from app.config import *
 class PriceSummary:
     """Class to create a summary of current prices for multiple cryptocurrencies."""
     
@@ -8,13 +8,14 @@ class PriceSummary:
         self.selected_cryptos = selected_cryptos
         self.timeframe = timeframe
         self.data_fetcher = data_fetcher
+        self.display()
 
     def display(self):
         """Display price summary cards"""
         cols = st.columns(len(self.selected_cryptos))
         
         for idx, crypto in enumerate(self.selected_cryptos):
-            symbol = self.available_cryptos[crypto]
+            symbol = AVAILABLE_CRYPTOS[crypto]
             current_price, price_change = self.data_fetcher.get_current_price(symbol)
             
             with cols[idx]:

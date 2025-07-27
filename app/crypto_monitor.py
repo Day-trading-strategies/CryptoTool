@@ -1,14 +1,13 @@
 import streamlit as st
 import time
 
-from typing import List
 # Import all our components
 from api.binance.data_fetcher import BinanceDataFetcher
 from app.sidebar.sidebar import Sidebar
 from app.charts.ohlc_chart import OHLCChartCreator
 from app.charts.price_summary import PriceSummary
 
-from config import *
+from app.config import *
 
 class CryptoMonitor:
     """Main application class for the Crypto Price Monitor."""
@@ -24,6 +23,9 @@ class CryptoMonitor:
         self._setup_page_config()
         self._initialize_components()
         self._render_footer()
+        # Auto-refresh functionality (always enabled)
+        time.sleep(AUTO_REFRESH_INTERVAL)
+        st.rerun()
 
     def _setup_page_config(self):
         """Configure Streamlit page settings."""
@@ -45,12 +47,12 @@ class CryptoMonitor:
             st.warning("Please select at least one cryptocurrency to monitor.")
             return
         self.price_display = PriceSummary(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.data_fetcher)
+        print(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.sidebar.selected_indicator, self.sidebar.indicator_params)
         self.chart_creator = OHLCChartCreator(self.sidebar.selected_cryptos,
                                                self.sidebar.selected_timeframe,
                                                self.data_fetcher,
                                                self.sidebar.selected_indicator,
                                                self.sidebar.indicator_params)
-
 
     def _render_footer(self):
         # Footer
@@ -63,7 +65,3 @@ class CryptoMonitor:
             """, 
             unsafe_allow_html=True
         )
-    
-        # Auto-refresh functionality (always enabled)
-        time.sleep(AUTO_REFRESH_INTERVAL)
-        st.rerun()

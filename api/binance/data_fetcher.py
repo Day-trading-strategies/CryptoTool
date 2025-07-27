@@ -2,7 +2,7 @@ import ccxt
 import streamlit as st
 import pandas as pd
 
-from config import *
+from app.config import *
 
 class BinanceDataFetcher:
     def __init__(self):
