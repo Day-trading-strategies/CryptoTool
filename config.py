@@ -10,6 +10,7 @@ AVAILABLE_CRYPTOS = {
     'SOL': 'SOL/USDT'
 }
 
+AVAILABLE_INDICATORS = ["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
 
 # Available timeframes
 TIMEFRAMES = {

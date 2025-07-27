@@ -4,9 +4,10 @@ from typing import List
 class PriceSummary:
     """Class to create a summary of current prices for multiple cryptocurrencies."""
     
-    def __init__(self, selected_cryptos, timeframe):
+    def __init__(self, selected_cryptos, timeframe, data_fetcher):
         self.selected_cryptos = selected_cryptos
         self.timeframe = timeframe
+        self.data_fetcher = data_fetcher
 
     def display(self):
         """Display price summary cards"""
@@ -14,7 +15,7 @@ class PriceSummary:
         
         for idx, crypto in enumerate(self.selected_cryptos):
             symbol = self.available_cryptos[crypto]
-            current_price, price_change = self.get_current_price(symbol)
+            current_price, price_change = self.data_fetcher.get_current_price(symbol)
             
             with cols[idx]:
                 if current_price is not None:

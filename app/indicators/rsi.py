@@ -2,7 +2,7 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 
-from .base_indicator import Indicator
+from .indicator import Indicator
 
 class RSIIndicator(Indicator):
     """RSI (Relative Strength Index) indicator."""

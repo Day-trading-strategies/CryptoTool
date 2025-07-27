@@ -31,7 +31,7 @@ echo ========================================
 echo.
 echo To run the app:
 echo   1. Double-click 'run_app.bat'
-echo   2. Or run: streamlit run crypto_monitor.py
+echo   2. Or run: streamlit run main.py
 echo.
 echo The app will open at: http://localhost:8501
 echo.
