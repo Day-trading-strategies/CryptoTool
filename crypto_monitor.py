@@ -19,6 +19,25 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Minimal CSS for button stability
+st.markdown("""
+<style>
+    /* Keep navigation buttons stable */
+    .stButton > button {
+        width: 100%;
+        height: 38px !important;
+        min-height: 38px !important;
+        max-height: 38px !important;
+    }
+    
+    /* Prevent column shifting */
+    div[data-testid="column"] {
+        min-height: 50px !important;
+        display: flex;
+        align-items: center;
+    }
+</style>""", unsafe_allow_html=True)
+
 class CryptoPriceMonitor:
     def __init__(self):
         self.exchange = ccxt.binance({
@@ -543,7 +562,10 @@ def main():
                     
                     current_position = st.session_state[nav_key]
                     
-                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, current_position)
+                    # Determine chart position - use navigation only if no highlights are active
+                    chart_pos = None if highlighted_timestamps else current_position
+                    
+                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, chart_pos)
                     if fig:
                         # Show current highlights
                         if highlighted_timestamps:
@@ -563,42 +585,21 @@ def main():
                             if any('→' in info for info in highlight_info):
                                 st.caption("🔶 Orange stars show approximate matches (closest earlier time)")
                         
-                        st.plotly_chart(
-                            fig, 
-                            use_container_width=True,
-                            key=f"chart_{crypto}_{idx}_{len(highlighted_timestamps)}_{current_position}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
-                            config={
-                                'displayModeBar': True,
-                                'scrollZoom': True,  # Enable mouse scroll zoom
-                                'doubleClick': 'reset',  # Double-click to reset zoom
-                                'showTips': False,
-                                'displaylogo': False,
-                                'dragmode': 'pan',  # Set pan as default mode
-                                'modeBarButtonsToRemove': [
-                                    'downloadPlot',
-                                    'toImage',
-                                    'lasso2d',
-                                    'select2d',
-                                    'zoom2d',         # Remove zoom tool
-                                    'zoomIn2d',       # Remove zoom in button
-                                    'zoomOut2d',      # Remove zoom out button
-                                    'autoScale2d'     # Remove auto scale button
-                                ]
-                            }
-                        )
-                        
-                        # Chart Navigation Controls
+                        # Chart Navigation Controls - MOVED ABOVE CHART
                         st.markdown("**📊 Chart Navigation:**")
+                        
                         nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
                         
                         with nav_col1:
-                            if st.button("⬅️ Back", key=f"nav_back_{crypto}_{idx}"):
+                            nav_back_disabled = current_position <= 0
+                            if st.button("⬅️ Back", key=f"nav_back_{crypto}_{idx}", disabled=nav_back_disabled, use_container_width=True):
                                 if current_position > 0:
                                     st.session_state[nav_key] = current_position - 1
                                     st.rerun()
                         
                         with nav_col2:
-                            if st.button("➡️ Forward", key=f"nav_forward_{crypto}_{idx}"):
+                            nav_forward_disabled = current_position >= len(df) - 1
+                            if st.button("➡️ Forward", key=f"nav_forward_{crypto}_{idx}", disabled=nav_forward_disabled, use_container_width=True):
                                 if current_position < len(df) - 1:
                                     st.session_state[nav_key] = current_position + 1
                                     st.rerun()
@@ -609,11 +610,39 @@ def main():
                             st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
                         
                         with nav_col4:
-                            if st.button("🏠 Latest", key=f"nav_latest_{crypto}_{idx}"):
+                            nav_latest_disabled = current_position >= len(df) - 1
+                            if st.button("🏠 Latest", key=f"nav_latest_{crypto}_{idx}", disabled=nav_latest_disabled, use_container_width=True):
                                 st.session_state[nav_key] = len(df) - 1
                                 st.rerun()
                         
-                        # Show dropdown interface for highlighting
+                        # Use a stable chart key to prevent unnecessary recreation
+                        chart_container = st.container()
+                        with chart_container:
+                            st.plotly_chart(
+                                fig, 
+                                use_container_width=True,
+                                key=f"chart_{crypto}_{idx}_stable",
+                                config={
+                                    'displayModeBar': True,
+                                    'scrollZoom': True,  # Enable mouse scroll zoom
+                                    'doubleClick': 'reset',  # Double-click to reset zoom
+                                    'showTips': False,
+                                    'displaylogo': False,
+                                    'dragmode': 'pan',  # Set pan as default mode
+                                    'modeBarButtonsToRemove': [
+                                        'downloadPlot',
+                                        'toImage',
+                                        'lasso2d',
+                                        'select2d',
+                                        'zoom2d',         # Remove zoom tool
+                                        'zoomIn2d',       # Remove zoom in button
+                                        'zoomOut2d',      # Remove zoom out button
+                                        'autoScale2d'     # Remove auto scale button
+                                    ]
+                                }
+                            )
+                        
+                        # Highlight Controls - MOVED AFTER CHART
                         st.markdown("**🎯 Highlight Candlesticks:**")
                         
                         # Create a date/time picker for choosing candlestick to highlight
@@ -704,7 +733,10 @@ def main():
             
             current_position = st.session_state[nav_key]
             
-            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, current_position)
+            # Determine chart position - use navigation only if no highlights are active
+            chart_pos = None if highlighted_timestamps else current_position
+            
+            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, chart_pos)
             if fig:
                 # Show current highlights
                 if highlighted_timestamps:
@@ -724,46 +756,21 @@ def main():
                     if any('→' in info for info in highlight_info):
                         st.caption("🔶 Orange stars show approximate matches (closest earlier time)")
                 
-                st.plotly_chart(
-                    fig, 
-                    use_container_width=True,
-                    key=f"chart_{crypto}_{len(highlighted_timestamps)}_{current_position}_{max(highlighted_timestamps).strftime('%H%M%S') if highlighted_timestamps else 'no_highlights'}",
-                    config={
-                        'displayModeBar': True,
-                        'modeBarButtonsToAdd': [
-                            ['drawrect']
-                        ],
-                        'scrollZoom': True,  # Enable mouse scroll zoom
-                        'doubleClick': 'reset',  # Double-click to reset zoom
-                        'showTips': False,
-                        'displaylogo': False,
-                        'dragmode': 'pan',  # Set pan as default mode
-                        'modeBarButtonsToRemove': [
-                            'downloadPlot',
-                            'toImage',
-                            'lasso2d',
-                            'select2d',
-                            'zoom2d',         # Remove zoom tool
-                            'zoomIn2d',       # Remove zoom in button
-                            'zoomOut2d',      # Remove zoom out button
-                            'autoScale2d'     # Remove auto scale button
-                        ]
-                        
-                    }
-                )
-                
-                # Chart Navigation Controls
+                # Chart Navigation Controls - MOVED ABOVE CHART
                 st.markdown("### 📊 Chart Navigation")
+                
                 nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
                 
                 with nav_col1:
-                    if st.button("⬅️ Back", key=f"nav_back_{crypto}"):
+                    nav_back_disabled = current_position <= 0
+                    if st.button("⬅️ Back", key=f"nav_back_{crypto}", disabled=nav_back_disabled, use_container_width=True):
                         if current_position > 0:
                             st.session_state[nav_key] = current_position - 1
                             st.rerun()
                 
                 with nav_col2:
-                    if st.button("➡️ Forward", key=f"nav_forward_{crypto}"):
+                    nav_forward_disabled = current_position >= len(df) - 1
+                    if st.button("➡️ Forward", key=f"nav_forward_{crypto}", disabled=nav_forward_disabled, use_container_width=True):
                         if current_position < len(df) - 1:
                             st.session_state[nav_key] = current_position + 1
                             st.rerun()
@@ -774,9 +781,41 @@ def main():
                     st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 with nav_col4:
-                    if st.button("🏠 Latest", key=f"nav_latest_{crypto}"):
+                    nav_latest_disabled = current_position >= len(df) - 1
+                    if st.button("🏠 Latest", key=f"nav_latest_{crypto}", disabled=nav_latest_disabled, use_container_width=True):
                         st.session_state[nav_key] = len(df) - 1
                         st.rerun()
+                
+                # Use a stable chart key to prevent unnecessary recreation
+                chart_container = st.container()
+                with chart_container:
+                    st.plotly_chart(
+                        fig, 
+                        use_container_width=True,
+                        key=f"chart_{crypto}_stable",
+                        config={
+                            'displayModeBar': True,
+                            'modeBarButtonsToAdd': [
+                                ['drawrect']
+                            ],
+                            'scrollZoom': True,  # Enable mouse scroll zoom
+                            'doubleClick': 'reset',  # Double-click to reset zoom
+                            'showTips': False,
+                            'displaylogo': False,
+                            'dragmode': 'pan',  # Set pan as default mode
+                            'modeBarButtonsToRemove': [
+                                'downloadPlot',
+                                'toImage',
+                                'lasso2d',
+                                'select2d',
+                                'zoom2d',         # Remove zoom tool
+                                'zoomIn2d',       # Remove zoom in button
+                                'zoomOut2d',      # Remove zoom out button
+                                'autoScale2d'     # Remove auto scale button
+                            ]
+                            
+                        }
+                    )
                 
                 # Highlighting interface
                 st.markdown("### 🎯 Highlight Candlesticks")
@@ -879,10 +918,10 @@ def main():
         unsafe_allow_html=True
     )
     
-    
-    # Auto-refresh functionality (always enabled)
-    time.sleep(AUTO_REFRESH_INTERVAL)
-    st.rerun()
+    # Remove auto-refresh to prevent scroll jumping
+    # Auto-refresh functionality (disabled to prevent scroll issues)
+    # time.sleep(AUTO_REFRESH_INTERVAL)
+    # st.rerun()
 
 if __name__ == "__main__":
     main()
