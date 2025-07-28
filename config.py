@@ -22,7 +22,6 @@ TIMEFRAMES = {
     '1d': '1d'
 }
 
-# Indicators that do not overlay on top of price chart.
 SEPARATE_AX_INDICATORS ={
     "RSI",
     "William % Range",

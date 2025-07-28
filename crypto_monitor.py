@@ -1,12 +1,11 @@
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import plotly.express as px
 import pandas as pd
 import ta
 import requests
-import time
-from datetime import datetime, timedelta
+import time as time_module
+from datetime import datetime, timedelta, date, time
 import ccxt
 from config import *
 
@@ -85,6 +84,24 @@ class CryptoPriceMonitor:
 
         return df
 
+    def compute_indicators(self, df, indicators, params):
+        """Add all requested indicator columns to df in one pass."""
+        if "RSI" in indicators:
+            df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=params["RSI"]["window"]).rsi()
+        if "William % Range" in indicators:
+            df["WR"] = ta.momentum.williams_r(df["high"], df["low"], df["close"], lbp=params["William % Range"]["lbp"])
+        if "Bollinger Band" in indicators:
+            bb = ta.volatility.BollingerBands(df["close"], window=params["Bollinger Band"]["window"],
+                                              window_dev=params["Bollinger Band"]["window_dev"])
+            df["bb_middle"], df["bb_upper"], df["bb_lower"] = bb.bollinger_mavg(), bb.bollinger_hband(), bb.bollinger_lband()
+        if "KDJ" in indicators:
+            stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"],
+                                                     window=params["KDJ"]["period"],
+                                                     smooth_window=params["KDJ"]["signal"])
+            df["%K"], df["%D"] = stoch.stoch(), stoch.stoch_signal()
+            df["%J"] = 3 * df["%K"] - 2 * df["%D"]
+        return df
+    
     def create_ohlc_chart(self, df, symbol, timeframe, indicators, params):
         """Create OHLC candlestick chart"""
         if df is None or df.empty:
@@ -95,7 +112,6 @@ class CryptoPriceMonitor:
             df = self.calculate_half_trend(df, period=params['Half Trend']['period'],
                                            multiplier=params['Half Trend']['multiplier'])
 
-
         sep_inds = []
         for ind in indicators:
             if ind in self.separate_ax_indicators:
@@ -103,7 +119,7 @@ class CryptoPriceMonitor:
 
         # Changes height of chart as more indicators are added.
         n_rows = 1 + len(sep_inds)
-        weights      = [3] + [1] * len(sep_inds)
+        weights = [3] + [1] * len(sep_inds)
         total_weight = sum(weights)
         row_heights  = [w/total_weight for w in weights]
 
@@ -283,7 +299,6 @@ class CryptoPriceMonitor:
         # Update axes
         fig.update_xaxes(gridcolor='#2d3748', showgrid=True)
         fig.update_yaxes(gridcolor='#2d3748', showgrid=True)
-        
         return fig
     
     def display_price_summary(self, selected_cryptos, timeframe):
@@ -305,13 +320,166 @@ class CryptoPriceMonitor:
                 else:
                     st.error(f"Unable to fetch {crypto} data")
 
+class CryptoBacktester:
+    def __init__(self, monitor, start_date, end_date, conditions:dict):
+        self.monitor = monitor
+        self.start_date = datetime.combine(start_date, time.min)
+        self.end_date   = datetime.combine(end_date, time.max)
+        self.indicator_conditions = conditions
+        self.tf_to_ms = {
+            '1m':  60_000,
+            '3m':  3 * 60_000
+            '5m':  5 * 60_000,
+            '15m': 15 * 60_000,
+            '1h':  60 * 60_000,
+            '4h':  4 * 60 * 60_000,
+            '1d':  24 * 60 * 60_000,
+        }
+    # grabs data from start_date to end_date
+    def fetch_historical(self, symbol, timeframe):
+        """
+        Fetch all OHLC bars from start_date up to end_date,
+        without explicitly setting a `limit`—we rely on CCXT’s default.
+        """
+        all_bars = []
+        # turns dates into timestamps
+        since_ms = int(self.start_date.timestamp() * 1_000)
+        end_ms   = int(self.end_date.timestamp()   * 1_000)
+        step     = self.tf_to_ms[timeframe]
+
+        while since_ms <= end_ms:
+            # no `limit` argument here → CCXT/binance uses its default (500)
+            ohlcv = self.monitor.exchange.fetch_ohlcv(
+                symbol,
+                timeframe,
+                since=since_ms
+            )
+            if not ohlcv:
+                break
+
+            # keep only bars up to end_date
+            page = [bar for bar in ohlcv if bar[0] <= end_ms]
+            if not page:
+                break
+
+            all_bars.extend(page)
+            last_ts = page[-1][0]
+
+            # stop if we’ve already covered end_ms
+            if last_ts >= end_ms:
+                break
+
+            # advance since to one bar past the last timestamp
+            since_ms = last_ts + step
+
+            # if we got fewer than the default page-size (500), we’re done
+            if len(ohlcv) < 500:
+                break
+
+        # build DataFrame
+        df = pd.DataFrame(all_bars, columns=[
+            'timestamp','open','high','low','close','volume'
+        ])
+        df.drop('volume', axis=1, inplace=True)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df
+    
+    
+    # Will return timestamps. Maybe return values of indicators as well?
+    def find_hits(self, df: pd.DataFrame, epsilon: float = 0.5) -> pd.DataFrame:
+        # building mask knowing all rows have real numbers
+        mask = pd.Series(True, index=df.index)
+        up = pd.Series(False, index=df.index)
+        down = pd.Series(False, index=df.index)
+        touch_top = pd.Series(False, index=df.index)
+        touch_bot = pd.Series(False, index=df.index)
+
+
+        if "RSI_U" in self.indicator_conditions or "RSI_L" in self.indicator_conditions:
+            up = pd.Series(False, index=df.index)
+            down = pd.Series(False, index=df.index)
+
+            if "RSI_U" in self.indicator_conditions:
+                thr = self.indicator_conditions["RSI_U"]
+                rsi = df["rsi"]
+                up   = (rsi.shift(1) < thr) & (rsi >= thr)
+
+            if "RSI_L" in self.indicator_conditions:
+                thr = self.indicator_conditions["RSI_L"]
+                rsi = df["rsi"]
+                down = (rsi.shift(1) > thr) & (rsi <= thr)
+
+            mask &= (up | down)
+
+        # William %R crossing
+        if "William % Range" in self.indicator_conditions:
+            thr = self.indicator_conditions["William % Range"]
+            wr  = df["WR"]
+            up   = (wr.shift(1) < thr) & (wr >= thr)
+            down = (wr.shift(1) > thr) & (wr <= thr)
+            mask &= (up | down)
+
+        # Bollinger Band touches
+        if ("Bollinger Top" in self.indicator_conditions or 
+            "Bollinger Bottom" in self.indicator_conditions or
+            "Bollinger Either" in self.indicator_conditions
+            ):
+            # start with both False
+            touch_top = pd.Series(False, index=df.index)
+            touch_bot = pd.Series(False, index=df.index)
+            up = df["bb_upper"]
+            touch_top = (
+                (df["high"].shift(1) < up.shift(1))
+                & (df["high"] >= up)
+            )
+            low = df["bb_lower"]
+            touch_bot = (
+                (df["low"].shift(1) > low.shift(1))
+                & (df["low"] <= low)
+            )
+            # top‐band touch?
+            if "Bollinger Top" in self.indicator_conditions:
+                mask &= touch_top
+
+            # bottom‐band touch?
+            if "Bollinger Bottom" in self.indicator_conditions:
+                mask &= touch_bot
+                
+            if "Bollinger Either" in self.indicator_conditions:
+                mask &= (touch_top | touch_bot)
+
+            # only now AND in whichever the user asked for
+
+        # KDJ intersection
+        if "KDJ" in self.indicator_conditions:
+            K, D, J = df["%K"], df["%D"], df["%J"]
+            intersect = (K.sub(D).abs() < epsilon) & (K.sub(J).abs() < epsilon)
+            mask &= intersect
+
+
+        # Return only the timestamps that made it through all tests
+        return df.loc[mask].reset_index(drop=True)
+
 def main():
     st.title("🚀 Crypto Price Monitor")
-    st.markdown("---")
-    
+    st.markdown("---")        
+
     # Initialize the monitor
     monitor = CryptoPriceMonitor()
     
+    # Initialize session_state for backtest persistence ---
+    for key in ("bt_mode","bt_df","bt_crypto"):
+        if key not in st.session_state:
+            st.session_state[key] = None
+    if "chart_end" not in st.session_state:
+        st.session_state.chart_end = None
+
+    if st.session_state.bt_mode is None:
+        st.session_state.bt_mode = False
+    
+    if "hit_index" not in st.session_state:
+        st.session_state.hit_index = 0  # “no hit selected” state 
+
     # Sidebar controls
     st.sidebar.header("Settings")
     
@@ -334,7 +502,7 @@ def main():
     selected_timeframe = st.sidebar.selectbox(
         "Select timeframe:",
         options=list(monitor.timeframes.keys()),
-        index=4  # Default to 1h
+        index=6  # Default to 1h
     )
     
     # Refresh button
@@ -369,7 +537,7 @@ def main():
             "lbp": st.sidebar.number_input("William %R window", 2, 100, 14, key="WR_w")
         }
 
-    if "Half Trend RMA" in selected_indicator:
+    if "Half Trend" in selected_indicator:
         indicator_params["Half Trend"] = {
             "period":     st.sidebar.number_input("HT ATR period", 2, 50, 10, key="HT_p"),
             "multiplier": st.sidebar.slider("HT multiplier", 0.1, 3.0, 1.0, 0.1, key="HT_m")
@@ -387,9 +555,90 @@ def main():
     
     # Display charts
     st.subheader("📈 OHLC Charts")
-    
+
+
+    if st.session_state.bt_mode:
+        symbol = monitor.available_cryptos[st.session_state["bt_crypto"]]
+        crypto = st.session_state["bt_crypto"]
+
+        st.session_state["bt_df"] = st.session_state["ob"].fetch_historical(symbol, selected_timeframe)
+        df = st.session_state["bt_df"]
+        fig = monitor.create_ohlc_chart(st.session_state["bt_df"], crypto, selected_timeframe, selected_indicator, indicator_params)
+
+        # if user chooses a hit point to test, create chart from start to hit point
+        if st.session_state.chart_end:
+            temp_df = df[df["timestamp"] <= st.session_state.chart_end]
+            fig = monitor.create_ohlc_chart(temp_df, crypto, selected_timeframe, selected_indicator, indicator_params)
+        # else create chart with original data.
+
+        if fig:
+            st.plotly_chart(
+                fig, 
+                use_container_width=True,
+                config={
+                    'displayModeBar': True,
+                    'scrollZoom': True,  # Enable mouse scroll zoom
+                    'doubleClick': 'reset',  # Double-click to reset zoom
+                    'showTips': False,
+                    'displaylogo': False,
+                    'dragmode': 'pan',  # Set pan as default mode
+                    'modeBarButtonsToRemove': [
+                        'downloadPlot',
+                        'toImage',
+                        'lasso2d',
+                        'select2d',
+                        'zoom2d',         # Remove zoom tool
+                        'zoomIn2d',       # Remove zoom in button
+                        'zoomOut2d',      # Remove zoom out button
+                        'autoScale2d'     # Remove auto scale button
+                    ]
+                }
+            )
+            # create csv file with all the prices and indicators
+            st.session_state["bt_df"].to_csv("backtest_data.csv", index=False)
+
+            hits = st.session_state["ob"].find_hits(st.session_state["bt_df"])
+            timestamps = hits["timestamp"].tolist()
+            # we only need the timestamps for click‐points
+            hits["timestamp"].to_csv("filtered_backtest.csv", index=False) 
+
+            # render a “Next →” button
+            if st.button("Next →", key="next_hit"):
+                # advance index (wrap around)
+                if st.session_state.hit_index < len(timestamps) - 1:
+                    st.session_state.hit_index += 1
+                else:
+                    st.session_state.hit_index = 0
+                # set chart_end to the newly selected hit
+                st.session_state.chart_end = timestamps[st.session_state.hit_index]
+
+                      
+            try:
+                filtered = pd.read_csv("filtered_backtest.csv")
+                filtered["timestamp"] = pd.to_datetime(filtered["timestamp"])
+                # turn timestamps into strings for display
+                times = filtered["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
+            except FileNotFoundError:
+                times = []
+
+            # Show them in an expander as clickable buttons
+            with st.expander(f"Found {len(timestamps)} hit points."):
+                if not times:
+                    st.write("No hits found (or filtered_backtest.csv not present).")
+                else:
+                    for idx, ts in enumerate(times):
+                        # each timestamp is a button; clicking does nothing for now
+                        if st.button(ts, key=f"hit_btn_{idx}"):
+                            # parse back into a datetime
+                            st.session_state.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                            st.rerun()
+
+        else:
+            st.error(f"Unable to Backtest Chart")
+            
+
     # Create tabs for each cryptocurrency
-    if len(selected_cryptos) > 1:
+    elif len(selected_cryptos) > 1:
         tabs = st.tabs(selected_cryptos)
         for idx, crypto in enumerate(selected_cryptos):
             with tabs[idx]:
@@ -435,16 +684,13 @@ def main():
         
         # if able to load coin price data.
         if df is not None:
-            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator)
+            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params)
             if fig:
                 st.plotly_chart(
                     fig, 
                     use_container_width=True,
                     config={
                         'displayModeBar': True,
-                        'modeBarButtonsToAdd': [
-                            ['drawrect']
-                        ],
                         'scrollZoom': True,  # Enable mouse scroll zoom
                         'doubleClick': 'reset',  # Double-click to reset zoom
                         'showTips': False,
@@ -469,9 +715,71 @@ def main():
                     st.dataframe(df.tail(10).iloc[::-1], use_container_width=True)
         else:
             st.error(f"Unable to load chart for {crypto}")
-    
+
+    with st.expander("Backtesting Settings"):
+        start_date = st.date_input(
+            "Start Date",
+            value=datetime.now().date() - timedelta(days=30),
+            key="bt_start"
+        )
+        end_date = st.date_input(
+            "End Date",
+            value=datetime.now().date(),
+            key="bt_end"
+        )
+        #number
+        st.session_state["bt_crypto"] = st.selectbox(
+        "Select Crypto:",
+        options=list(monitor.available_cryptos.keys()),
+        index=0  # Default to BTC
+        )
+        st.markdown("**Indicator Conditions(select indicator in sidebar to show.)**")
+        
+        indicator_conditions = {}
+        if "RSI" in selected_indicator:
+            # RSI
+            if st.checkbox("RSI Upper Bound", key="bt_chk_rsi_u"):#number
+                indicator_conditions["RSI_U"] = st.number_input("RSI Upper Bound", 0.0, 100.0, 70.0, step=0.1, key="bt_rsi_u")
+            if st.checkbox("RSI Lower Bound", key="bt_chk_rsi_l"):
+                indicator_conditions["RSI_L"] = st.number_input("RSI Lower Bound", 0.0, 100.0, 30.0, step=0.1, key="bt_rsi_l")
+
+        if "Bollinger Band" in selected_indicator:
+            # Bollinger Band
+            if st.checkbox("BB Price Touches Top Band"):
+                indicator_conditions["Bollinger Top"] = True
+            if st.checkbox("BB Price Touches Bottom Band"):
+                indicator_conditions["Bollinger Bottom"] = True
+            if st.checkbox("BB Touch Either"):
+                indicator_conditions["Bollinger Either"] = True
+
+        if "William % Range" in selected_indicator:
+            # William %R
+            if st.checkbox("William %R Condition", key="bt_chk_wr"):
+                indicator_conditions["William % Range"] = st.number_input(
+                    "William %R Threshold (e.g. -20)", -100.0, 0.0, -20.0, step=0.1, key="bt_wr"
+                )
+        if "KDJ" in selected_indicator:
+            # KDJ
+            if st.checkbox("KDJ Intersection", key="bt_chk_kdj"):
+                indicator_conditions["KDJ"] = True
+        if "Half Trend" in selected_indicator:
+            # Half Trend
+            if st.checkbox("Half Trend Condition", key="bt_chk_ht"):
+                indicator_conditions["Half Trend"] = st.number_input(
+                    "Half Trend Multiplier Threshold (e.g. 1.0)", 0.1, 5.0, 1.0, step=0.1, key="bt_ht"
+                )
+
+        run_bt = st.button("▶ Run Backtest", key="bt_run")
+
+    # backtesting 
+    # session_state variables will save [object, data]
+    if run_bt:
+        st.session_state.bt_mode = True
+        st.session_state["ob"] = CryptoBacktester(monitor, start_date, end_date, indicator_conditions)
+        st.rerun()
+        
     # Footer
-    st.markdown("---")
+    st.markdown("---")  
     
     st.markdown(
         """
@@ -484,8 +792,9 @@ def main():
     
     
     # Auto-refresh functionality (always enabled)
-    time.sleep(AUTO_REFRESH_INTERVAL)
-    st.rerun()
+    if not st.session_state.bt_mode:
+        time_module.sleep(AUTO_REFRESH_INTERVAL)
+        st.rerun()
 
 if __name__ == "__main__":
     main()
