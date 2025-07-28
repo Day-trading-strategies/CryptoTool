@@ -328,7 +328,7 @@ class CryptoBacktester:
         self.indicator_conditions = conditions
         self.tf_to_ms = {
             '1m':  60_000,
-            '3m':  3 * 60_000
+            '3m':  3 * 60_000,
             '5m':  5 * 60_000,
             '15m': 15 * 60_000,
             '1h':  60 * 60_000,
