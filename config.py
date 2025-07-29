@@ -1,46 +1,60 @@
-# # Configuration file for Crypto Price Monitor
+# Configuration file for Crypto Price Monitor
 
-# # Default cryptocurrencies to display
-# DEFAULT_CRYPTOS = ['BTC', 'ETH', 'SOL']
+# Default cryptocurrencies to display
+DEFAULT_CRYPTOS = ['BTC', 'ETH', 'SOL']
 
-# # Available cryptocurrencies (easily expandable)
-# AVAILABLE_CRYPTOS = {
-#     'BTC': 'BTC/USDT',
-#     'ETH': 'ETH/USDT', 
-#     'SOL': 'SOL/USDT'
-# }
+# Available cryptocurrencies (easily expandable)
+AVAILABLE_CRYPTOS = {
+    'BTC': 'BTC/USDT',
+    'ETH': 'ETH/USDT', 
+    'SOL': 'SOL/USDT'
+}
 
-# AVAILABLE_INDICATORS = ["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
+AVAILABLE_INDICATORS = ["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
 
-# # Available timeframes
-# TIMEFRAMES = {
-#     '1m': '1m',
-#     '3m': '3m', 
-#     '5m': '5m',
-#     '15m': '15m',
-#     '1h': '1h',
-#     '4h': '4h',
-#     '1d': '1d'
-# }
+# Available timeframes
+TIMEFRAMES = {
+    '1m': '1m',
+    '3m': '3m', 
+    '5m': '5m',
+    '15m': '15m',
+    '1h': '1h',
+    '4h': '4h',
+    '1d': '1d'
+}
 
-# # Indicators that do not overlay on top of price chart.
-# SEPARATE_AX_INDICATORS ={
-#     "RSI",
-#     "William % Range",
-#     "KDJ"
-# }
+# Indicators that do not overlay on top of price chart.
+SEPARATE_AX_INDICATORS ={
+    "RSI",
+    "William % Range",
+    "KDJ"
+}
 
-# # Chart settings
-# CHART_HEIGHT = 700
-# CACHE_TTL_OHLC = 120  # seconds
-# CACHE_TTL_PRICE = 60  # seconds
-# AUTO_REFRESH_INTERVAL = 10  # seconds
+# Chart settings
+CHART_HEIGHT = 700
+CACHE_TTL_OHLC = 120  # seconds
+CACHE_TTL_PRICE = 60  # seconds
+AUTO_REFRESH_INTERVAL = 10  # seconds
 
-# # Chart colors
-# BULLISH_COLOR = '#00ff88'
-# BEARISH_COLOR = '#ff4444'
+# Chart colors
+BULLISH_COLOR = '#00ff88'
+BEARISH_COLOR = '#ff4444'
 
-# # Exchange settings
-# EXCHANGE_NAME = 'binance'
-# RATE_LIMIT = 1200
-# ENABLE_RATE_LIMIT = True
+# Exchange settings
+EXCHANGE_NAME = 'binance'
+RATE_LIMIT = 1200
+ENABLE_RATE_LIMIT = True
+
+# Default settings
+DEFAULT_TIMEFRAME = '5m'
+DEFAULT_INDICATORS = ['RSI', 'Bollinger Band']
+
+# Indicator default parameters
+RSI_WINDOW = 14
+WR_LBP = 14
+BB_WINDOW = 20
+BB_WINDOW_DEV = 2.0
+KDJ_PERIOD = 14
+KDJ_SIGNAL = 3
+HALF_TREND_PERIOD = 10
+HALF_TREND_MULTIPLIER = 1.0

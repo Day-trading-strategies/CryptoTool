@@ -5,11 +5,10 @@ import plotly.express as px
 import pandas as pd
 import ta
 import requests
-import time
-from datetime import datetime, timedelta
+import time as time_module
+from datetime import datetime, timedelta, date, time
 import ccxt
 from config import *
-import pytz
 
 # Page configuration
 st.set_page_config(
@@ -108,6 +107,24 @@ class CryptoPriceMonitor:
                 ht.append(prev_ht)
         df['half_trend'] = ht
 
+        return df
+
+    def compute_indicators(self, df, indicators, params):
+        """Add all requested indicator columns to df in one pass."""
+        if "RSI" in indicators:
+            df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=params["RSI"]["window"]).rsi()
+        if "William % Range" in indicators:
+            df["WR"] = ta.momentum.williams_r(df["high"], df["low"], df["close"], lbp=params["William % Range"]["lbp"])
+        if "Bollinger Band" in indicators:
+            bb = ta.volatility.BollingerBands(df["close"], window=params["Bollinger Band"]["window"],
+                                              window_dev=params["Bollinger Band"]["window_dev"])
+            df["bb_middle"], df["bb_upper"], df["bb_lower"] = bb.bollinger_mavg(), bb.bollinger_hband(), bb.bollinger_lband()
+        if "KDJ" in indicators:
+            stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"],
+                                                     window=params["KDJ"]["period"],
+                                                     smooth_window=params["KDJ"]["signal"])
+            df["%K"], df["%D"] = stoch.stoch(), stoch.stoch_signal()
+            df["%J"] = 3 * df["%K"] - 2 * df["%D"]
         return df
 
     def create_ohlc_chart(self, df, symbol, timeframe, indicators, params, highlighted_timestamps=None, chart_position=None):
@@ -460,623 +477,563 @@ class CryptoPriceMonitor:
                 else:
                     st.error(f"Unable to fetch {crypto} data")
 
+class CryptoBacktester:
+    def __init__(self, monitor, start_date, end_date, conditions:dict):
+        self.monitor = monitor
+        self.start_date = datetime.combine(start_date, time.min)
+        self.end_date   = datetime.combine(end_date, time.max)
+        self.indicator_conditions = conditions
+        self.tf_to_ms = {
+            '1m':  60_000,
+            '3m':  3 * 60_000,
+            '5m':  5 * 60_000,
+            '15m': 15 * 60_000,
+            '1h':  60 * 60_000,
+            '4h':  4 * 60 * 60_000,
+            '1d':  24 * 60 * 60_000,
+        }
+    # grabs data from start_date to end_date
+    def fetch_historical(self, symbol, timeframe):
+        """
+        Fetch all OHLC bars from start_date up to end_date,
+        without explicitly setting a `limit`—we rely on CCXT's default.
+        """
+        all_bars = []
+        # turns dates into timestamps
+        since_ms = int(self.start_date.timestamp() * 1_000)
+        end_ms   = int(self.end_date.timestamp()   * 1_000)
+        step     = self.tf_to_ms[timeframe]
+        while since_ms <= end_ms:
+            # no `limit` argument here → CCXT/binance uses its default (500)
+            ohlcv = self.monitor.exchange.fetch_ohlcv(
+                symbol,
+                timeframe,
+                since=since_ms
+            )
+            if not ohlcv:
+                break
+            # keep only bars up to end_date
+            page = [bar for bar in ohlcv if bar[0] <= end_ms]
+            if not page:
+                break
+            all_bars.extend(page)
+            last_ts = page[-1][0]
+            # stop if we've already covered end_ms
+            if last_ts >= end_ms:
+                break
+            # advance since to one bar past the last timestamp
+            since_ms = last_ts + step
+            # if we got fewer than the default page-size (500), we're done
+            if len(ohlcv) < 500:
+                break
+        # build DataFrame
+        df = pd.DataFrame(all_bars, columns=[
+            'timestamp','open','high','low','close','volume'
+        ])
+        df.drop('volume', axis=1, inplace=True)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df
+
+
+    # Will return timestamps. Maybe return values of indicators as well?
+    def find_hits(self, df: pd.DataFrame, epsilon: float = 0.5) -> pd.DataFrame:
+        # building mask knowing all rows have real numbers
+        mask = pd.Series(True, index=df.index)
+        up = pd.Series(False, index=df.index)
+        down = pd.Series(False, index=df.index)
+        touch_top = pd.Series(False, index=df.index)
+        touch_bot = pd.Series(False, index=df.index)
+        if "RSI_U" in self.indicator_conditions or "RSI_L" in self.indicator_conditions:
+            up = pd.Series(False, index=df.index)
+            down = pd.Series(False, index=df.index)
+            if "RSI_U" in self.indicator_conditions:
+                thr = self.indicator_conditions["RSI_U"]
+                rsi = df["rsi"]
+                up   = (rsi.shift(1) < thr) & (rsi >= thr)
+            if "RSI_L" in self.indicator_conditions:
+                thr = self.indicator_conditions["RSI_L"]
+                rsi = df["rsi"]
+                down = (rsi.shift(1) > thr) & (rsi <= thr)
+            mask &= (up | down)
+        # William %R crossing
+        if "William % Range" in self.indicator_conditions:
+            thr = self.indicator_conditions["William % Range"]
+            wr  = df["WR"]
+            up   = (wr.shift(1) < thr) & (wr >= thr)
+            down = (wr.shift(1) > thr) & (wr <= thr)
+            mask &= (up | down)
+        # Bollinger Band touches
+        if ("Bollinger Top" in self.indicator_conditions or
+            "Bollinger Bottom" in self.indicator_conditions or
+            "Bollinger Either" in self.indicator_conditions
+            ):
+            # start with both False
+            touch_top = pd.Series(False, index=df.index)
+            touch_bot = pd.Series(False, index=df.index)
+            up = df["bb_upper"]
+            touch_top = (
+                (df["high"].shift(1) < up.shift(1))
+                & (df["high"] >= up)
+            )
+            low = df["bb_lower"]
+            touch_bot = (
+                (df["low"].shift(1) > low.shift(1))
+                & (df["low"] <= low)
+            )
+            # top‐band touch?
+            if "Bollinger Top" in self.indicator_conditions:
+                mask &= touch_top
+            # bottom‐band touch?
+            if "Bollinger Bottom" in self.indicator_conditions:
+                mask &= touch_bot
+
+            if "Bollinger Either" in self.indicator_conditions:
+                mask &= (touch_top | touch_bot)
+            # only now AND in whichever the user asked for
+        # KDJ intersection
+        if "KDJ" in self.indicator_conditions:
+            K, D, J = df["%K"], df["%D"], df["%J"]
+            intersect = (K.sub(D).abs() < epsilon) & (K.sub(J).abs() < epsilon)
+            mask &= intersect
+        # Return only the timestamps that made it through all tests
+        return df.loc[mask].reset_index(drop=True)
+
 def main():
-    st.title("🚀 Crypto Price Monitor")
-    st.markdown("---")
+    """Main function to run the Streamlit app"""
+    
+    # Initialize session state variables for both modes
+    if 'monitor_mode' not in st.session_state:
+        st.session_state.monitor_mode = 'live'  # 'live' or 'practice'
+    
+    # Initialize highlighted_timestamps for live mode
+    if 'highlighted_timestamps' not in st.session_state:
+        st.session_state.highlighted_timestamps = []
+    
+    # Initialize navigation state for live mode
+    if 'chart_position' not in st.session_state:
+        st.session_state.chart_position = None
+    
+    # Initialize practice mode state
+    if 'practice_results' not in st.session_state:
+        st.session_state.practice_results = None
+    if 'practice_symbol' not in st.session_state:
+        st.session_state.practice_symbol = None
+    if 'practice_timeframe' not in st.session_state:
+        st.session_state.practice_timeframe = None
+    if 'practice_df' not in st.session_state:
+        st.session_state.practice_df = None
+    
+    st.title("🚀 Crypto Price Monitor & Backtester")
+    
+    # Mode selection
+    mode = st.selectbox(
+        "Select Mode:",
+        ["Live Monitoring", "Practice/Backtest"],
+        index=0 if st.session_state.monitor_mode == 'live' else 1
+    )
+    
+    # Update session state
+    st.session_state.monitor_mode = 'live' if mode == "Live Monitoring" else 'practice'
     
     # Initialize the monitor
     monitor = CryptoPriceMonitor()
     
-    # Sidebar controls
-    st.sidebar.header("Settings")
-    
-    # Cryptocurrency selection
-    st.sidebar.subheader("Select Cryptocurrencies")
-    default_cryptos = DEFAULT_CRYPTOS
-    selected_cryptos = st.sidebar.multiselect(
-        "Choose cryptocurrencies to monitor:",
-        options=list(monitor.available_cryptos.keys()),
-        default=default_cryptos
-    )
-    #indicator selection
-    st.sidebar.subheader("Indicator")
-    selected_indicator = st.sidebar.multiselect(
-        "Select Indicator:",
-        options=["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
-    )
-    # Timeframe selection
-    st.sidebar.subheader("Timeframe")
-    selected_timeframe = st.sidebar.selectbox(
-        "Select timeframe:",
-        options=list(monitor.timeframes.keys()),
-        index=4  # Default to 1h
-    )
-    
-    # Refresh button
-    if st.sidebar.button("🔄 Refresh Now"):
-        st.cache_data.clear()
-        st.rerun()
-
-    st.sidebar.markdown("---")
-
-    # Indicator Parameters that appear when indicator is selected
-    indicator_params = {}
-
-    if "RSI" in selected_indicator:
-        indicator_params["RSI"] = {
-            "window": st.sidebar.number_input("RSI window", 2, 100, 14, key="RSI_w")
-        }
-
-    if "Bollinger Band" in selected_indicator:
-        indicator_params["Bollinger Band"] = {
-            "window":     st.sidebar.number_input("BB window", 2, 100, 20, key="BB_w"),
-            "window_dev": st.sidebar.slider("BB σ-dev", 1.0, 4.0, 2.0, 0.1, key="BB_d")
-        }
-
-    if "KDJ" in selected_indicator:
-        indicator_params["KDJ"] = {
-            "period": st.sidebar.number_input("KDJ period", 2, 100, 14, key="KDJ_p"),
-            "signal": st.sidebar.number_input("KDJ signal", 1, 10, 3, key="KDJ_s"),
-        }
-
-    if "William % Range" in selected_indicator:
-        indicator_params["William % Range"] = {
-            "lbp": st.sidebar.number_input("William %R window", 2, 100, 14, key="WR_w")
-        }
-
-    if "Half Trend" in selected_indicator:
-        indicator_params["Half Trend"] = {
-            "period":     st.sidebar.number_input("HT ATR period", 2, 50, 10, key="HT_p"),
-            "multiplier": st.sidebar.slider("HT multiplier", 0.1, 3.0, 1.0, 0.1, key="HT_m")
-        }
-
-    if not selected_cryptos:
-        st.warning("Please select at least one cryptocurrency to monitor.")
-        return
-    
-    # Display price summary
-    st.subheader("📊 Price Summary")
-    monitor.display_price_summary(selected_cryptos, monitor.timeframes[selected_timeframe])
-    
-    st.markdown("---")
-    
-    # Display charts
-    st.subheader("📈 OHLC Charts")
-    
-    # Create tabs for each cryptocurrency
-    if len(selected_cryptos) > 1:
-        tabs = st.tabs(selected_cryptos)
-        for idx, crypto in enumerate(selected_cryptos):
-            with tabs[idx]:
-                symbol = monitor.available_cryptos[crypto]
-                df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[selected_timeframe])
-                
-                if df is not None:
-                    # Get highlighted candlesticks for this crypto (using timestamps)
-                    highlight_key = f"highlighted_candles_{crypto}"
-                    highlighted_timestamps = st.session_state.get(highlight_key, [])
-                    
-                    # Chart navigation state
-                    nav_key = f"chart_nav_{crypto}"
-                    timeframe_key = f"timeframe_{crypto}"
-                    
-                    # Check if timeframe has changed
-                    previous_timeframe = st.session_state.get(timeframe_key, None)
-                    current_timeframe = selected_timeframe
-                    timeframe_changed = previous_timeframe != current_timeframe
-                    
-                    if timeframe_changed:
-                        # Reset navigation to latest when timeframe changes
-                        st.session_state[nav_key] = len(df) - 1
-                        st.session_state[timeframe_key] = current_timeframe
-                    
-                    if nav_key not in st.session_state:
-                        st.session_state[nav_key] = len(df) - 1  # Start at the most recent candlestick
-                    
-                    current_position = int(st.session_state[nav_key])
-                    
-                    # Check if we should auto-pan to a new highlight
-                    should_auto_pan_to_highlight = False
-                    navigation_was_updated = False
-                    if highlighted_timestamps and not timeframe_changed:  # Don't auto-pan if timeframe just changed
-                        # Check if this is a new highlight by comparing with previous state
-                        prev_highlights_key = f"prev_highlighted_candles_{crypto}"
-                        prev_highlights = st.session_state.get(prev_highlights_key, [])
-                        
-                        # If we have new highlights, auto-pan to the latest one
-                        if len(highlighted_timestamps) > len(prev_highlights):
-                            # Find the latest highlighted timestamp and set navigation position to it
-                            latest_highlight = max(highlighted_timestamps)
-                            
-                            # Find the closest matching row in the dataframe (exact or closest earlier)
-                            matching_rows = df[df['timestamp'] == latest_highlight]
-                            if matching_rows.empty:
-                                # Find closest earlier timestamp - this is what actually gets displayed
-                                earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
-                                if not earlier_timestamps.empty:
-                                    closest_timestamp = earlier_timestamps.max()
-                                    matching_rows = df[df['timestamp'] == closest_timestamp]
-                            
-                            if not matching_rows.empty:
-                                # Update navigation position to the highlighted candlestick (using actual displayed timestamp)
-                                # Find the position of the actual displayed timestamp in the current dataframe
-                                actual_timestamp = matching_rows.iloc[0]['timestamp']
-                                # Find where this actual timestamp appears in the current dataframe
-                                position_rows = df[df['timestamp'] == actual_timestamp]
-                                if not position_rows.empty:
-                                    highlight_position = int(position_rows.index[0])
-                                    st.session_state[nav_key] = highlight_position
-                                    current_position = highlight_position
-                                    navigation_was_updated = True
-                            
-                            # Update the previous highlights state
-                            st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
-                    elif highlighted_timestamps and timeframe_changed:
-                        # When timeframe changes and we have highlights, find the highlighted position in new timeframe
-                        latest_highlight = max(highlighted_timestamps)
-                        
-                        # Find the closest matching row in the new timeframe dataframe
-                        matching_rows = df[df['timestamp'] == latest_highlight]
-                        if matching_rows.empty:
-                            # Find closest earlier timestamp
-                            earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
-                            if not earlier_timestamps.empty:
-                                closest_timestamp = earlier_timestamps.max()
-                                matching_rows = df[df['timestamp'] == closest_timestamp]
-                        
-                        if not matching_rows.empty:
-                            # Update navigation position to the highlighted candlestick in new timeframe
-                            actual_timestamp = matching_rows.iloc[0]['timestamp']
-                            position_rows = df[df['timestamp'] == actual_timestamp]
-                            if not position_rows.empty:
-                                highlight_position = position_rows.index[0]
-                                st.session_state[nav_key] = highlight_position
-                                current_position = highlight_position
-                                navigation_was_updated = True
-                    
-                    # Always use navigation position when available, especially after updates
-                    chart_pos = current_position  # Always use navigation position for consistent behavior
-                    
-                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, chart_pos)
-                    if fig:
-                        # Show current highlights
-                        if highlighted_timestamps:
-                            highlight_info = []
-                            for ts in highlighted_timestamps:
-                                # Check if we have an exact match or need approximation
-                                exact_match = df[df['timestamp'] == ts]
-                                if not exact_match.empty:
-                                    highlight_info.append(f"{ts.strftime('%H:%M:%S')}")
-                                else:
-                                    # Find closest earlier timestamp
-                                    earlier_timestamps = df[df['timestamp'] <= ts]['timestamp']
-                                    if not earlier_timestamps.empty:
-                                        closest_timestamp = earlier_timestamps.max()
-                                        highlight_info.append(f"{ts.strftime('%H:%M:%S')}→{closest_timestamp.strftime('%H:%M:%S')}")
-                            st.info(f"💫 Currently highlighted: {sorted(highlight_info)}")
-                            if any('→' in info for info in highlight_info):
-                                st.caption("🔶 Orange stars show approximate matches (closest earlier time)")
-                        
-                        # Chart Navigation Controls - MOVED ABOVE CHART
-                        st.markdown("**📊 Chart Navigation:**")
-                        
-                        nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
-                        
-                        with nav_col1:
-                            nav_back_disabled = bool(current_position <= 0)
-                            if st.button("⬅️ Back", key=f"nav_back_{crypto}_{idx}", disabled=nav_back_disabled, use_container_width=True):
-                                if current_position > 0:
-                                    st.session_state[nav_key] = current_position - 1
-                                    st.rerun()
-                        
-                        with nav_col2:
-                            nav_forward_disabled = bool(current_position >= len(df) - 1)
-                            if st.button("➡️ Forward", key=f"nav_forward_{crypto}_{idx}", disabled=nav_forward_disabled, use_container_width=True):
-                                if current_position < len(df) - 1:
-                                    st.session_state[nav_key] = current_position + 1
-                                    st.rerun()
-                        
-                        with nav_col3:
-                            # Show current position info
-                            current_candle = df.iloc[current_position]
-                            st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
-                        
-                        with nav_col4:
-                            nav_latest_disabled = bool(current_position >= len(df) - 1)
-                            if st.button("🏠 Latest", key=f"nav_latest_{crypto}_{idx}", disabled=nav_latest_disabled, use_container_width=True):
-                                st.session_state[nav_key] = len(df) - 1
-                                st.rerun()
-                        
-                        # Use a stable chart key to prevent unnecessary recreation
-                        chart_container = st.container()
-                        with chart_container:
-                            st.plotly_chart(
-                                fig, 
-                                use_container_width=True,
-                                key=f"chart_{crypto}_{idx}_stable",
-                                config={
-                                    'displayModeBar': True,
-                                    'scrollZoom': True,  # Enable mouse scroll zoom
-                                    'doubleClick': 'reset',  # Double-click to reset zoom
-                                    'showTips': False,
-                                    'displaylogo': False,
-                                    'dragmode': 'pan',  # Set pan as default mode
-                                    'modeBarButtonsToRemove': [
-                                        'downloadPlot',
-                                        'toImage',
-                                        'lasso2d',
-                                        'select2d',
-                                        'zoom2d',         # Remove zoom tool
-                                        'zoomIn2d',       # Remove zoom in button
-                                        'zoomOut2d',      # Remove zoom out button
-                                        'autoScale2d'     # Remove auto scale button
-                                    ]
-                                }
-                            )
-                        
-                        # Highlight Controls - MOVED AFTER CHART
-                        st.markdown("**🎯 Highlight Candlesticks:**")
-                        
-                        # Create a date/time picker for choosing candlestick to highlight
-                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-                        
-                        with col1:
-                            # Get date range from the data
-                            min_date = df['timestamp'].min().date()
-                            max_date = df['timestamp'].max().date()
-                            min_time = df['timestamp'].min().time()
-                            max_time = df['timestamp'].max().time()
-                            
-                            # Date picker
-                            selected_date = st.date_input(
-                                "Select Date:",
-                                value=max_date,  # Default to most recent date
-                                min_value=min_date,
-                                max_value=max_date,
-                                key=f"date_{crypto}_{idx}"
-                            )
-                            
-                            # Time picker - get available times for selected date
-                            available_times = df[df['timestamp'].dt.date == selected_date]['timestamp'].dt.time.tolist()
-                            if available_times:
-                                selected_time = st.selectbox(
-                                    "Select Time:",
-                                    options=available_times,
-                                    index=len(available_times)-1,  # Default to most recent time
-                                    format_func=lambda x: x.strftime('%H:%M:%S'),
-                                    key=f"time_{crypto}_{idx}"
-                                )
-                                
-                                # Find the corresponding timestamp
-                                selected_datetime = pd.Timestamp.combine(selected_date, selected_time)
-                                # Check if this timestamp exists in the data
-                                matching_rows = df[df['timestamp'] == selected_datetime]
-                                if not matching_rows.empty:
-                                    st.info(f"Selected: {selected_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-                                    selected_timestamp = selected_datetime
-                                else:
-                                    selected_timestamp = None
-                                    st.warning("No candlestick found for selected date/time")
-                            else:
-                                selected_timestamp = None
-                                st.warning("No data available for selected date")
-                        
-                        with col2:
-                            if st.button("⭐ Highlight", key=f"highlight_{crypto}_{idx}"):
-                                if selected_timestamp is not None and selected_timestamp not in highlighted_timestamps:
-                                    highlighted_timestamps.append(selected_timestamp)
-                                    st.session_state[highlight_key] = highlighted_timestamps
-                                    st.rerun()
-                        
-                        with col3:
-                            if st.button("❌ Remove", key=f"remove_{crypto}_{idx}"):
-                                if selected_timestamp is not None and selected_timestamp in highlighted_timestamps:
-                                    highlighted_timestamps.remove(selected_timestamp)
-                                    st.session_state[highlight_key] = highlighted_timestamps
-                                    # Update previous highlights state to reflect removal
-                                    prev_highlights_key = f"prev_highlighted_candles_{crypto}"
-                                    st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
-                                    st.rerun()
-                        
-                        with col4:
-                            if st.button("🗑️ Clear All", key=f"clear_all_{crypto}_{idx}"):
-                                if highlighted_timestamps:
-                                    st.session_state[highlight_key] = []
-                                    # Update previous highlights state to reflect clearing
-                                    prev_highlights_key = f"prev_highlighted_candles_{crypto}"
-                                    st.session_state[prev_highlights_key] = []
-                                    st.rerun()
-                        
-                        # Display data table
-                        with st.expander(f"📋 {crypto} Data Table"):
-                            st.dataframe(df.tail(10).iloc[::-1], use_container_width=True)
-                else:
-                    st.error(f"Unable to load chart for {crypto}")
-    else:
-        # Single cryptocurrency view
-        crypto = selected_cryptos[0]
-        symbol = monitor.available_cryptos[crypto]
-        df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[selected_timeframe])
+    if st.session_state.monitor_mode == 'live':
+        # Live Monitoring Mode
         
-        # if able to load coin price data.
-        if df is not None:
-            # Get highlighted candlesticks for this crypto (using timestamps)
-            highlight_key = f"highlighted_candles_{crypto}"
-            highlighted_timestamps = st.session_state.get(highlight_key, [])
+        # Create sidebar for settings
+        with st.sidebar:
+            st.header("📊 Chart Settings")
             
-            # Chart navigation state
-            nav_key = f"chart_nav_{crypto}"
-            timeframe_key = f"timeframe_{crypto}"
+            # Select multiple cryptocurrencies
+            selected_cryptos = st.multiselect(
+                "Select Cryptocurrencies:",
+                options=list(monitor.available_cryptos.keys()),
+                default=DEFAULT_CRYPTOS
+            )
             
-            # Check if timeframe has changed
-            previous_timeframe = st.session_state.get(timeframe_key, None)
-            current_timeframe = selected_timeframe
-            timeframe_changed = previous_timeframe != current_timeframe
+            # Select timeframe
+            timeframe = st.selectbox(
+                "Select Timeframe:",
+                options=list(monitor.timeframes.keys()),
+                index=list(monitor.timeframes.keys()).index(DEFAULT_TIMEFRAME)
+            )
             
-            if timeframe_changed:
-                # Reset navigation to latest when timeframe changes
-                st.session_state[nav_key] = len(df) - 1
-                st.session_state[timeframe_key] = current_timeframe
+            # Select indicators to display
+            st.subheader("Technical Indicators")
+            indicators = st.multiselect(
+                "Select Indicators:",
+                options=["Half Trend", "RSI", "William % Range", "Bollinger Band", "KDJ"],
+                default=DEFAULT_INDICATORS
+            )
             
-            if nav_key not in st.session_state:
-                st.session_state[nav_key] = len(df) - 1  # Start at the most recent candlestick
+            # Indicator parameters
+            params = {}
+            if "Half Trend" in indicators:
+                st.subheader("Half Trend Settings")
+                params['Half Trend'] = {
+                    'period': st.slider("Period", 1, 50, HALF_TREND_PERIOD),
+                    'multiplier': st.slider("Multiplier", 0.1, 5.0, HALF_TREND_MULTIPLIER, 0.1)
+                }
             
-            current_position = int(st.session_state[nav_key])
+            if "RSI" in indicators:
+                st.subheader("RSI Settings")
+                params['RSI'] = {
+                    'window': st.slider("RSI Window", 1, 50, RSI_WINDOW)
+                }
             
-            # Check if we should auto-pan to a new highlight
-            should_auto_pan_to_highlight = False
-            navigation_was_updated = False
-            if highlighted_timestamps and not timeframe_changed:  # Don't auto-pan if timeframe just changed
-                # Check if this is a new highlight by comparing with previous state
-                prev_highlights_key = f"prev_highlighted_candles_{crypto}"
-                prev_highlights = st.session_state.get(prev_highlights_key, [])
-                
-                # If we have new highlights, auto-pan to the latest one
-                if len(highlighted_timestamps) > len(prev_highlights):
-                    # Find the latest highlighted timestamp and set navigation position to it
-                    latest_highlight = max(highlighted_timestamps)
-                    
-                    # Find the closest matching row in the dataframe (exact or closest earlier)
-                    matching_rows = df[df['timestamp'] == latest_highlight]
-                    if matching_rows.empty:
-                        # Find closest earlier timestamp - this is what actually gets displayed
-                        earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
-                        if not earlier_timestamps.empty:
-                            closest_timestamp = earlier_timestamps.max()
-                            matching_rows = df[df['timestamp'] == closest_timestamp]
-                    
-                if not matching_rows.empty:
-                    # Update navigation position to the highlighted candlestick (using actual displayed timestamp)
-                    # Find the position of the actual displayed timestamp in the current dataframe
-                    actual_timestamp = matching_rows.iloc[0]['timestamp']
-                    # Find where this actual timestamp appears in the current dataframe
-                    position_rows = df[df['timestamp'] == actual_timestamp]
-                    if not position_rows.empty:
-                        highlight_position = int(position_rows.index[0])
-                        st.session_state[nav_key] = highlight_position
-                        current_position = highlight_position
-                        navigation_was_updated = True                    # Update the previous highlights state
-                    st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
-                else:
-                    st.write("📍 Using navigation position")
-            elif highlighted_timestamps and timeframe_changed:
-                # When timeframe changes and we have highlights, find the highlighted position in new timeframe
-                latest_highlight = max(highlighted_timestamps)
-                
-                # Find the closest matching row in the new timeframe dataframe
-                matching_rows = df[df['timestamp'] == latest_highlight]
-                if matching_rows.empty:
-                    # Find closest earlier timestamp
-                    earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
-                    if not earlier_timestamps.empty:
-                        closest_timestamp = earlier_timestamps.max()
-                        matching_rows = df[df['timestamp'] == closest_timestamp]
-                
-                if not matching_rows.empty:
-                    # Update navigation position to the highlighted candlestick in new timeframe
-                    actual_timestamp = matching_rows.iloc[0]['timestamp']
-                    position_rows = df[df['timestamp'] == actual_timestamp]
-                    if not position_rows.empty:
-                        highlight_position = int(position_rows.index[0])
-                        st.session_state[nav_key] = highlight_position
-                        current_position = highlight_position
-                        navigation_was_updated = True
+            if "William % Range" in indicators:
+                st.subheader("William % Range Settings")
+                params['William % Range'] = {
+                    'lbp': st.slider("Lookback Period", 1, 50, WR_LBP)
+                }
             
-            # Always use navigation position when available, especially after updates
-            chart_pos = current_position  # Always use navigation position for consistent behavior
+            if "Bollinger Band" in indicators:
+                st.subheader("Bollinger Bands Settings")
+                params['Bollinger Band'] = {
+                    'window': st.slider("BB Window", 1, 50, BB_WINDOW),
+                    'window_dev': st.slider("BB Std Dev", 0.1, 5.0, BB_WINDOW_DEV, 0.1)
+                }
             
-            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params, highlighted_timestamps, chart_pos)
-            if fig:
-                # Show current highlights
-                if highlighted_timestamps:
-                    highlight_info = []
-                    for ts in highlighted_timestamps:
-                        # Check if we have an exact match or need approximation
-                        exact_match = df[df['timestamp'] == ts]
-                        if not exact_match.empty:
-                            highlight_info.append(f"{ts.strftime('%H:%M:%S')}")
-                        else:
-                            # Find closest earlier timestamp
-                            earlier_timestamps = df[df['timestamp'] <= ts]['timestamp']
-                            if not earlier_timestamps.empty:
-                                closest_timestamp = earlier_timestamps.max()
-                                highlight_info.append(f"{ts.strftime('%H:%M:%S')}→{closest_timestamp.strftime('%H:%M:%S')}")
-                    st.info(f"💫 Currently highlighted: {sorted(highlight_info)}")
-                    if any('→' in info for info in highlight_info):
-                        st.caption("🔶 Orange stars show approximate matches (closest earlier time)")
-                
-                # Chart Navigation Controls - MOVED ABOVE CHART
-                st.markdown("### 📊 Chart Navigation")
-                
-                nav_col1, nav_col2, nav_col3, nav_col4 = st.columns([1, 1, 2, 1])
-                
-                with nav_col1:
-                    nav_back_disabled = bool(current_position <= 0)
-                    if st.button("⬅️ Back", key=f"nav_back_{crypto}", disabled=nav_back_disabled, use_container_width=True):
-                        if current_position > 0:
-                            st.session_state[nav_key] = current_position - 1
-                            st.rerun()
-                
-                with nav_col2:
-                    nav_forward_disabled = bool(current_position >= len(df) - 1)
-                    if st.button("➡️ Forward", key=f"nav_forward_{crypto}", disabled=nav_forward_disabled, use_container_width=True):
-                        if current_position < len(df) - 1:
-                            st.session_state[nav_key] = current_position + 1
-                            st.rerun()
-                
-                with nav_col3:
-                    # Show current position info
-                    current_candle = df.iloc[current_position]
-                    st.info(f"📍 Position: {current_position + 1}/{len(df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
-                
-                with nav_col4:
-                    nav_latest_disabled = bool(current_position >= len(df) - 1)
-                    if st.button("🏠 Latest", key=f"nav_latest_{crypto}", disabled=nav_latest_disabled, use_container_width=True):
-                        st.session_state[nav_key] = len(df) - 1
-                        st.rerun()
-                
-                # Use a stable chart key to prevent unnecessary recreation
-                chart_container = st.container()
-                with chart_container:
-                    st.plotly_chart(
-                        fig, 
-                        use_container_width=True,
-                        key=f"chart_{crypto}_stable",
-                        config={
-                            'displayModeBar': True,
-                            'modeBarButtonsToAdd': [
-                                ['drawrect']
-                            ],
-                            'scrollZoom': True,  # Enable mouse scroll zoom
-                            'doubleClick': 'reset',  # Double-click to reset zoom
-                            'showTips': False,
-                            'displaylogo': False,
-                            'dragmode': 'pan',  # Set pan as default mode
-                            'modeBarButtonsToRemove': [
-                                'downloadPlot',
-                                'toImage',
-                                'lasso2d',
-                                'select2d',
-                                'zoom2d',         # Remove zoom tool
-                                'zoomIn2d',       # Remove zoom in button
-                                'zoomOut2d',      # Remove zoom out button
-                                'autoScale2d'     # Remove auto scale button
-                            ]
-                            
-                        }
-                    )
-                
-                # Highlighting interface
-                st.markdown("### 🎯 Highlight Candlesticks")
-                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
-                
-                with col1:
-                    # Get date range from the data
-                    min_date = df['timestamp'].min().date()
-                    max_date = df['timestamp'].max().date()
-                    
-                    # Date picker
-                    selected_date = st.date_input(
-                        "Select Date:",
-                        value=max_date,  # Default to most recent date
-                        min_value=min_date,
-                        max_value=max_date,
-                        key=f"date_single_{crypto}"
-                    )
-                    
-                    # Time picker - get available times for selected date
-                    available_times = df[df['timestamp'].dt.date == selected_date]['timestamp'].dt.time.tolist()
-                    if available_times:
-                        selected_time = st.selectbox(
-                            "Select Time:",
-                            options=available_times,
-                            index=len(available_times)-1,  # Default to most recent time
-                            format_func=lambda x: x.strftime('%H:%M:%S'),
-                            key=f"time_single_{crypto}"
-                        )
+            if "KDJ" in indicators:
+                st.subheader("KDJ Settings")
+                params['KDJ'] = {
+                    'period': st.slider("KDJ Period", 1, 50, KDJ_PERIOD),
+                    'signal': st.slider("KDJ Signal", 1, 10, KDJ_SIGNAL)
+                }
+            
+            # Refresh button
+            if st.button("🔄 Refresh Data", type="primary"):
+                st.cache_data.clear()
+        
+        # Main content area for live mode
+        if selected_cryptos:
+            # Display price summary
+            st.subheader("💰 Current Prices")
+            monitor.display_price_summary(selected_cryptos, timeframe)
+            
+            # Highlight Controls
+            st.subheader("🎯 Highlight Controls")
+            
+            # Create columns for highlight controls
+            h_col1, h_col2, h_col3, h_col4 = st.columns([3, 2, 2, 2])
+            
+            with h_col1:
+                # Input for adding highlights
+                highlight_input = st.text_input(
+                    "Add Highlight (YYYY-MM-DD HH:MM:SS):",
+                    placeholder="2024-01-15 14:30:00",
+                    help="Enter timestamp to highlight on chart"
+                )
+            
+            with h_col2:
+                if st.button("➕ Add Highlight", type="secondary"):
+                    try:
+                        # Parse the input timestamp
+                        highlight_time = datetime.strptime(highlight_input, "%Y-%m-%d %H:%M:%S")
                         
-                        # Find the corresponding timestamp
-                        selected_datetime = pd.Timestamp.combine(selected_date, selected_time)
-                        # Check if this timestamp exists in the data
-                        matching_rows = df[df['timestamp'] == selected_datetime]
-                        if not matching_rows.empty:
-                            st.info(f"Selected: {selected_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-                            selected_timestamp = selected_datetime
+                        # Add to session state
+                        if highlight_time not in st.session_state.highlighted_timestamps:
+                            st.session_state.highlighted_timestamps.append(highlight_time)
+                            st.rerun()
                         else:
-                            selected_timestamp = None
-                            st.warning("No candlestick found for selected date/time")
-                    else:
-                        selected_timestamp = None
-                        st.warning("No data available for selected date")
+                            st.warning("Timestamp already highlighted!")
+                    except ValueError:
+                        if highlight_input.strip():  # Only show error if there was input
+                            st.error("Invalid format! Use YYYY-MM-DD HH:MM:SS")
+            
+            with h_col3:
+                if st.button("🗑️ Clear All", type="secondary"):
+                    st.session_state.highlighted_timestamps = []
+                    st.rerun()
+            
+            with h_col4:
+                if st.button("📍 Go to Latest", type="secondary"):
+                    # Reset navigation to show latest data
+                    st.session_state.chart_position = None
+                    st.rerun()
+            
+            # Display current highlights
+            if st.session_state.highlighted_timestamps:
+                st.write("**Current Highlights:**")
+                for i, ts in enumerate(st.session_state.highlighted_timestamps):
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        st.write(f"• {ts.strftime('%Y-%m-%d %H:%M:%S')}")
+                    with col2:
+                        if st.button("❌", key=f"remove_{i}", help="Remove this highlight"):
+                            st.session_state.highlighted_timestamps.pop(i)
+                            st.rerun()
+            
+            # Charts section
+            st.subheader("📈 Live Charts")
+            
+            # Fetch and display charts for each selected crypto
+            for crypto in selected_cryptos:
+                symbol = monitor.available_cryptos[crypto]
                 
-                with col2:
-                    if st.button("⭐ Highlight", key=f"highlight_btn_{crypto}"):
-                        if selected_timestamp is not None:
-                            if f"highlighted_candles_{crypto}" not in st.session_state:
-                                st.session_state[f"highlighted_candles_{crypto}"] = []
-                            if selected_timestamp not in st.session_state[f"highlighted_candles_{crypto}"]:
-                                st.session_state[f"highlighted_candles_{crypto}"].append(selected_timestamp)
-                                st.rerun()
+                # Create columns for chart and navigation
+                chart_col, nav_col = st.columns([4, 1])
                 
-                with col3:
-                    if st.button("🗑️ Remove", key=f"remove_btn_{crypto}"):
-                        if selected_timestamp is not None:
-                            if f"highlighted_candles_{crypto}" in st.session_state:
-                                if selected_timestamp in st.session_state[f"highlighted_candles_{crypto}"]:
-                                    st.session_state[f"highlighted_candles_{crypto}"].remove(selected_timestamp)
-                                    # Update previous highlights state to reflect removal
-                                    prev_highlights_key = f"prev_highlighted_candles_{crypto}"
-                                    st.session_state[prev_highlights_key] = st.session_state[f"highlighted_candles_{crypto}"].copy()
-                                    st.rerun()
-                
-                with col4:
-                    if st.button("🗑️ Clear All", key=f"clear_all_btn_{crypto}"):
-                        if f"highlighted_candles_{crypto}" in st.session_state:
-                            if st.session_state[f"highlighted_candles_{crypto}"]:
-                                st.session_state[f"highlighted_candles_{crypto}"] = []
-                                # Update previous highlights state to reflect clearing
-                                prev_highlights_key = f"prev_highlighted_candles_{crypto}"
-                                st.session_state[prev_highlights_key] = []
-                                st.rerun()
-                
-                # Display current highlights
-                if f"highlighted_candles_{crypto}" in st.session_state and st.session_state[f"highlighted_candles_{crypto}"]:
-                    highlighted_info = []
-                    for timestamp in st.session_state[f"highlighted_candles_{crypto}"]:
-                        # Find the corresponding row in current data
-                        matching_rows = df[df['timestamp'] == timestamp]
-                        if not matching_rows.empty:
-                            candle_data = matching_rows.iloc[0]
-                            highlighted_info.append(
-                                f"Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S')} - Close: ${candle_data['close']:.2f}"
+                with chart_col:
+                    with st.spinner(f'Loading {crypto} chart...'):
+                        df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[timeframe], limit=500)
+                        
+                        if df is not None and not df.empty:
+                            # Compute indicators for the chart
+                            df = monitor.compute_indicators(df, indicators, params)
+                            
+                            # Create chart with highlights and navigation position
+                            fig = monitor.create_ohlc_chart(
+                                df, crypto, timeframe, indicators, params,
+                                highlighted_timestamps=st.session_state.highlighted_timestamps,
+                                chart_position=st.session_state.chart_position
                             )
+                            
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True)
+                            else:
+                                st.error(f"Unable to create chart for {crypto}")
                         else:
-                            highlighted_info.append(f"Time: {timestamp.strftime('%Y-%m-%d %H:%M:%S')} - (Data not available)")
-                    
-                    st.info(f"Currently highlighted: {', '.join(highlighted_info)}")
+                            st.error(f"Unable to fetch data for {crypto}")
                 
-                # Display data table
-                with st.expander(f"📋 {crypto} Data Table"):
-                    st.dataframe(df.tail(10).iloc[::-1], use_container_width=True)
+                with nav_col:
+                    st.write("**Navigation**")
+                    
+                    # Navigation controls for this specific chart
+                    nav_key = f"nav_{crypto}"  # Unique key for each crypto
+                    
+                    if st.button("⏮️ Start", key=f"{nav_key}_start", help="Go to chart start"):
+                        if df is not None and not df.empty:
+                            st.session_state.chart_position = len(df) - 1  # Start = oldest data (end of df)
+                            st.rerun()
+                    
+                    if st.button("⏪ <<", key=f"{nav_key}_back10", help="Go back 10 candles"):
+                        if df is not None and not df.empty:
+                            current_pos = st.session_state.chart_position or 0
+                            new_pos = min(current_pos + 10, len(df) - 1)
+                            st.session_state.chart_position = new_pos
+                            st.rerun()
+                    
+                    if st.button("◀️ <", key=f"{nav_key}_back", help="Go back 1 candle"):
+                        if df is not None and not df.empty:
+                            current_pos = st.session_state.chart_position or 0
+                            new_pos = min(current_pos + 1, len(df) - 1)
+                            st.session_state.chart_position = new_pos
+                            st.rerun()
+                    
+                    if st.button("▶️ >", key=f"{nav_key}_forward", help="Go forward 1 candle"):
+                        if df is not None and not df.empty:
+                            current_pos = st.session_state.chart_position
+                            if current_pos is not None and current_pos > 0:
+                                st.session_state.chart_position = current_pos - 1
+                                st.rerun()
+                    
+                    if st.button("⏩ >>", key=f"{nav_key}_forward10", help="Go forward 10 candles"):
+                        if df is not None and not df.empty:
+                            current_pos = st.session_state.chart_position
+                            if current_pos is not None:
+                                new_pos = max(current_pos - 10, 0)
+                                st.session_state.chart_position = new_pos if new_pos > 0 else None
+                                st.rerun()
+                    
+                    if st.button("⏭️ Latest", key=f"{nav_key}_latest", help="Go to latest data"):
+                        st.session_state.chart_position = None
+                        st.rerun()
+                    
+                    # Show current position
+                    if df is not None and not df.empty:
+                        if st.session_state.chart_position is not None:
+                            pos = st.session_state.chart_position
+                            if 0 <= pos < len(df):
+                                current_time = df.iloc[pos]['timestamp']
+                                st.write(f"**Position:** {len(df) - pos}/{len(df)}")
+                                st.write(f"**Time:** {current_time.strftime('%m/%d %H:%M')}")
+                        else:
+                            st.write("**Position:** Latest")
+                
+                st.markdown("---")  # Separator between charts
+        
         else:
-            st.error(f"Unable to load chart for {crypto}")
+            st.warning("Please select at least one cryptocurrency to display.")
     
-    # Footer
-    st.markdown("---")
-    
-    st.markdown(
-        """
-        <div style='text-align: center; color: #666; font-size: 12px;'>
-        💡 Data provided by Binance API • Auto-refresh every 10 seconds • Built with Streamlit & Plotly
-        </div>
-        """, 
-        unsafe_allow_html=True
-    )
-    
-    # Remove auto-refresh to prevent scroll jumping
-    # Auto-refresh functionality (disabled to prevent scroll issues)
-    # time.sleep(AUTO_REFRESH_INTERVAL)
-    # st.rerun()
+    else:
+        # Practice/Backtest Mode
+        st.header("🎯 Practice Mode - Historical Backtesting")
+        
+        # Backtest configuration
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Symbol selection
+            practice_crypto = st.selectbox(
+                "Select Cryptocurrency for Backtesting:",
+                options=list(monitor.available_cryptos.keys()),
+                index=0
+            )
+            
+            # Date range
+            start_date = st.date_input(
+                "Start Date",
+                value=date.today() - timedelta(days=30),
+                max_value=date.today()
+            )
+            
+            end_date = st.date_input(
+                "End Date",
+                value=date.today(),
+                max_value=date.today()
+            )
+        
+        with col2:
+            # Timeframe selection
+            practice_timeframe = st.selectbox(
+                "Select Timeframe for Backtesting:",
+                options=list(monitor.timeframes.keys()),
+                index=2  # Default to 5m
+            )
+            
+            # Indicator conditions
+            st.subheader("Indicator Conditions")
+            
+            conditions = {}
+            
+            # RSI conditions
+            if st.checkbox("RSI Upper Threshold"):
+                conditions["RSI_U"] = st.slider("RSI Upper", 50, 100, 70)
+            
+            if st.checkbox("RSI Lower Threshold"):
+                conditions["RSI_L"] = st.slider("RSI Lower", 0, 50, 30)
+            
+            # William %R conditions
+            if st.checkbox("William %R Threshold"):
+                conditions["William % Range"] = st.slider("William %R", -100, 0, -20)
+            
+            # Bollinger Band conditions
+            bb_option = st.selectbox(
+                "Bollinger Band Touch:",
+                ["None", "Top Band", "Bottom Band", "Either Band"]
+            )
+            
+            if bb_option == "Top Band":
+                conditions["Bollinger Top"] = True
+            elif bb_option == "Bottom Band":
+                conditions["Bollinger Bottom"] = True
+            elif bb_option == "Either Band":
+                conditions["Bollinger Either"] = True
+            
+            # KDJ intersection
+            if st.checkbox("KDJ Line Intersection"):
+                conditions["KDJ"] = True
+        
+        # Run backtest button
+        if st.button("🚀 Run Backtest", type="primary"):
+            if conditions:  # Only run if at least one condition is selected
+                with st.spinner("Running backtest..."):
+                    try:
+                        # Create backtester
+                        symbol = monitor.available_cryptos[practice_crypto]
+                        backtester = CryptoBacktester(monitor, start_date, end_date, conditions)
+                        
+                        # Fetch historical data
+                        historical_df = backtester.fetch_historical(symbol, monitor.timeframes[practice_timeframe])
+                        
+                        if historical_df is not None and not historical_df.empty:
+                            # Set up indicators needed for conditions
+                            indicators_needed = []
+                            params_needed = {}
+                            
+                            if "RSI_U" in conditions or "RSI_L" in conditions:
+                                indicators_needed.append("RSI")
+                                params_needed["RSI"] = {"window": RSI_WINDOW}
+                            
+                            if "William % Range" in conditions:
+                                indicators_needed.append("William % Range")
+                                params_needed["William % Range"] = {"lbp": WR_LBP}
+                            
+                            if any(key in conditions for key in ["Bollinger Top", "Bollinger Bottom", "Bollinger Either"]):
+                                indicators_needed.append("Bollinger Band")
+                                params_needed["Bollinger Band"] = {"window": BB_WINDOW, "window_dev": BB_WINDOW_DEV}
+                            
+                            if "KDJ" in conditions:
+                                indicators_needed.append("KDJ")
+                                params_needed["KDJ"] = {"period": KDJ_PERIOD, "signal": KDJ_SIGNAL}
+                            
+                            # Compute indicators
+                            historical_df = monitor.compute_indicators(historical_df, indicators_needed, params_needed)
+                            
+                            # Find hits
+                            hits_df = backtester.find_hits(historical_df)
+                            
+                            # Store results in session state
+                            st.session_state.practice_results = hits_df
+                            st.session_state.practice_symbol = practice_crypto
+                            st.session_state.practice_timeframe = practice_timeframe
+                            st.session_state.practice_df = historical_df
+                            
+                            st.success(f"Backtest completed! Found {len(hits_df)} hits.")
+                        
+                        else:
+                            st.error("Unable to fetch historical data for the selected period.")
+                    
+                    except Exception as e:
+                        st.error(f"Error running backtest: {str(e)}")
+            else:
+                st.warning("Please select at least one indicator condition.")
+        
+        # Display results
+        if st.session_state.practice_results is not None:
+            st.subheader("📊 Backtest Results")
+            
+            hits_df = st.session_state.practice_results
+            
+            if not hits_df.empty:
+                st.write(f"**Total Hits Found:** {len(hits_df)}")
+                
+                # Convert hits to timestamps for highlighting
+                hit_timestamps = hits_df['timestamp'].tolist()
+                
+                # Display hit timestamps
+                st.write("**Hit Timestamps:**")
+                for i, hit_time in enumerate(hit_timestamps[:10]):  # Show first 10
+                    st.write(f"• {hit_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                if len(hit_timestamps) > 10:
+                    st.write(f"... and {len(hit_timestamps) - 10} more")
+                
+                # Create chart with hits highlighted
+                if st.session_state.practice_df is not None:
+                    st.subheader("📈 Backtest Chart")
+                    
+                    # Set up all indicators for chart display
+                    all_indicators = ["RSI", "William % Range", "Bollinger Band", "KDJ"]
+                    all_params = {
+                        "RSI": {"window": RSI_WINDOW},
+                        "William % Range": {"lbp": WR_LBP},
+                        "Bollinger Band": {"window": BB_WINDOW, "window_dev": BB_WINDOW_DEV},
+                        "KDJ": {"period": KDJ_PERIOD, "signal": KDJ_SIGNAL}
+                    }
+                    
+                    # Compute all indicators for display
+                    chart_df = monitor.compute_indicators(st.session_state.practice_df, all_indicators, all_params)
+                    
+                    # Create chart with hits highlighted
+                    fig = monitor.create_ohlc_chart(
+                        chart_df,
+                        st.session_state.practice_symbol,
+                        st.session_state.practice_timeframe,
+                        all_indicators,
+                        all_params,
+                        highlighted_timestamps=hit_timestamps
+                    )
+                    
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.error("Unable to create backtest chart")
+            
+            else:
+                st.warning("No hits found with the selected conditions. Try adjusting the thresholds.")
 
 if __name__ == "__main__":
     main()
