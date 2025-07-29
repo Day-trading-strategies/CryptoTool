@@ -393,8 +393,8 @@ class CryptoPriceMonitor:
                 # Get minutes for current timeframe, default to 60 if not found
                 tf_minutes = timeframe_minutes.get(timeframe, 60)
                 
-                # Show approximately 60 candles worth of data before the position
-                time_window_minutes = tf_minutes * 60
+                # Show approximately 80 candles worth of data before the position
+                time_window_minutes = tf_minutes * 80
                 start_time = end_time - pd.Timedelta(minutes=time_window_minutes)
                 
                 # Ensure start_time is not before our data range
@@ -435,8 +435,8 @@ class CryptoPriceMonitor:
             # Get minutes for current timeframe, default to 60 if not found
             tf_minutes = timeframe_minutes.get(timeframe, 60)
             
-            # Show approximately 60 candles worth of data before the highlight
-            time_window_minutes = tf_minutes * 60
+            # Show approximately 80 candles worth of data before the highlight
+            time_window_minutes = tf_minutes * 80
             start_time = end_time - pd.Timedelta(minutes=time_window_minutes)
             
             # Ensure start_time is not before our data range
@@ -777,7 +777,7 @@ def main():
                 
                 with chart_col:
                     with st.spinner(f'Loading {crypto} chart...'):
-                        df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[timeframe], limit=500)
+                        df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[timeframe], limit=100)
                         
                         if df is not None and not df.empty:
                             # Compute indicators for the chart
