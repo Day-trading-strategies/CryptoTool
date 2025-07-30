@@ -2,6 +2,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 
 from app.config import *
 
@@ -14,19 +15,102 @@ from app.indicators.kdj import KDJIndicator
 class OHLCChartCreator:
     """Class to create OHLC charts with optional indicators."""
     
-    def __init__(self, selected_cryptos, timeframe, data_fetcher, selected_indicators, indicator_params):
+    def __init__(self, selected_cryptos, timeframe, data_fetcher, selected_indicators, indicator_params, states):
         self.df = {crypto: [] for crypto in selected_cryptos}
         self.selected_cryptos = selected_cryptos
         self.selected_indicators = selected_indicators if selected_indicators is not None else []
         self.indicator_params = indicator_params
         self.timeframe = timeframe
         self.data_fetcher = data_fetcher
+        self.states = states
         self.render()
 
     def render(self):
         st.subheader("📈 OHLC Charts")
+        if self.states.bt_mode:
+            print("bt_mode on")
+            crypto = self.states.crypto
+            self.states.df = self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[crypto], 
+                self.timeframe, self.states.ob.start_date, self.states.ob.end_date
+                )
+            self.df[crypto] = self.states.df
+
+            fig = self.create_chart(crypto)
+            self.df[crypto].to_csv("backtest_data.csv", index=False)
+
+            # if user chooses a hit point to test, create chart from start to hit point
+            if self.states.chart_end:
+                temp_df = self.df[crypto].copy()
+                self.df[crypto] = self.df[crypto][self.df[crypto]["timestamp"] <= self.states.chart_end]
+                fig = self.create_chart(crypto)
+                self.df[crypto] = temp_df.copy()
+            # else create chart with original data.
+
+            if fig:
+                st.plotly_chart(
+                    fig, 
+                    use_container_width=True,
+                    config={
+                        'displayModeBar': True,
+                        'scrollZoom': True,  # Enable mouse scroll zoom
+                        'doubleClick': 'reset',  # Double-click to reset zoom
+                        'showTips': False,
+                        'displaylogo': False,
+                        'dragmode': 'pan',  # Set pan as default mode
+                        'modeBarButtonsToRemove': [
+                            'downloadPlot',
+                            'toImage',
+                            'lasso2d',
+                            'select2d',
+                            'zoom2d',         # Remove zoom tool
+                            'zoomIn2d',       # Remove zoom in button
+                            'zoomOut2d',      # Remove zoom out button
+                            'autoScale2d'     # Remove auto scale button
+                        ]
+                    }
+                )
+                hits = self.states.ob.find_hits(self.df[crypto])
+                hits["timestamp"].to_csv("filtered_backtest.csv", index=False) 
+
+                timestamps = hits["timestamp"].tolist()
+                
+                if self.states.chart_end in timestamps:
+                    self.states.hit_index = timestamps.index(self.states.chart_end)
+                else:
+                    self.states.hit_index = 0
+
+                # render a “Next →” button
+                if timestamps and st.button("Next →", key="next_hit"):
+                    next_idx = (self.states.hit_index + 1) % len(timestamps)
+                    self.states.hit_index = next_idx
+                    self.states.chart_end = timestamps[next_idx]
+                    st.rerun()
+                        
+                try:
+                    filtered = pd.read_csv("filtered_backtest.csv")
+                    filtered["timestamp"] = pd.to_datetime(filtered["timestamp"])
+                    # turn timestamps into strings for display
+                    times = filtered["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
+                except FileNotFoundError:
+                    times = []
+
+                # Show them in an expander as clickable buttons
+                with st.expander(f"Found {len(timestamps)} hit points."):
+                    if not times:
+                        st.write("No hits found (or filtered_backtest.csv not present).")
+                    else:
+                        for idx, ts in enumerate(times):
+                            # each timestamp is a button; clicking does nothing for now
+                            if st.button(ts, key=f"hit_btn_{idx}"):
+                                # parse back into a datetime
+                                self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                                st.rerun()
+
+            else:
+                st.error(f"Unable to Backtest Chart")
         # Create tabs for each cryptocurrency
-        if len(self.selected_cryptos) > 1:
+        elif len(self.selected_cryptos) > 1:
             tabs = st.tabs(self.selected_cryptos)
             for idx, crypto in enumerate(self.selected_cryptos):
                 with tabs[idx]:
@@ -101,12 +185,11 @@ class OHLCChartCreator:
             else:
                 st.error(f"Unable to load chart for {crypto}")
 
-
     def create_chart(self, crypto) -> go.Figure:
         """Create OHLC candlestick chart"""
         if self.df[crypto] is None or self.df[crypto].empty:
             return None
-        
+                
         sep_inds = []
         for ind in self.selected_indicators:
             if ind in SEPARATE_AX_INDICATORS:

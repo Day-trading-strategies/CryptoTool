@@ -47,7 +47,7 @@ class Sidebar:
         self.selected_timeframe = st.sidebar.selectbox(
         "Select timeframe:",
         options=list(TIMEFRAMES.keys()),
-        index=4  # Default to 1h
+        index=3  # Default to 1h
     )
         
     def render_refresh(self):
@@ -71,8 +71,8 @@ class Sidebar:
 
         if "KDJ" in self.selected_indicator:
             self.indicator_params["KDJ"] = {
-                "period": st.sidebar.number_input("KDJ period", 2, 100, 14, key="KDJ_p"),
-                "signal": st.sidebar.number_input("KDJ signal", 1, 10, 3, key="KDJ_s"),
+                "window": st.sidebar.number_input("KDJ window", 2, 100, 9, key="KDJ_p"),
+                "smoothing": st.sidebar.number_input("KDJ smoothing period", 1, 10, 3, key="KDJ_s"),
             }
 
         if "William % Range" in self.selected_indicator:
@@ -82,6 +82,5 @@ class Sidebar:
 
         if "Half Trend" in self.selected_indicator:
             self.indicator_params["Half Trend"] = {
-                "period":     st.sidebar.number_input("HT ATR period", 2, 50, 10, key="HT_p"),
-                "multiplier": st.sidebar.slider("HT multiplier", 0.1, 3.0, 1.0, 0.1, key="HT_m")
+                "amplitude":     st.sidebar.number_input("HT Amplitude", 2, 50, 5, key="HT_p"),
             }

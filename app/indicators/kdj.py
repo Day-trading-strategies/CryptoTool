@@ -7,24 +7,35 @@ from .indicator import Indicator
 class KDJIndicator(Indicator):
     """KDJ indicator."""
     
-    def __init__(self, period: int = 14, signal: int = 3):
+    def __init__(self, window: int = 9, smoothing:  int= 3):
         super().__init__("KDJ")
-        self.period = period
-        self.signal = signal
+        self.window = window
+        self.smoothing = smoothing
     
     def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate KDJ values."""
-        # Calculate KDJ using Stochastic Oscillator
-        stoch = ta.momentum.StochasticOscillator(
-            df["high"], df["low"], df["close"], 
-            window=self.period, smooth_window=self.signal
-        )
-        
-        # Add to DataFrame
-        df = df.copy()
-        df['%K'] = stoch.stoch()
-        df['%D'] = stoch.stoch_signal()
-        df['%J'] = 3 * df['%K'] - 2 * df['%D']
+        # compute RSV_t = 100 * (C - LLV(n)) / (HHV(n) - LLV(n))
+        low_n  = df['low'].rolling(window=self.window,  min_periods=1).min()
+        high_n = df['high'].rolling(window=self.window, min_periods=1).max()
+        rsv    = 100 * (df['close'] - low_n) / (high_n - low_n)
+
+        # 2) Wilder’s smoothing for %K and %D
+        k = pd.Series(index=df.index, dtype=float)
+        d = pd.Series(index=df.index, dtype=float)
+
+        # seed the first value
+        k.iloc[0] = rsv.iloc[0]
+        d.iloc[0] = k.iloc[0]
+
+        for i in range(1, len(df)):
+            k.iloc[i] = (rsv.iloc[i] + (self.smoothing - 1) * k.iloc[i-1]) / self.smoothing
+            d.iloc[i] = (k.iloc[i]   + (self.smoothing - 1) * d.iloc[i-1]) / self.smoothing
+
+        j = 3 * k - 2 * d
+
+        df['%K'] = k
+        df['%D'] = d
+        df['%J'] = j
         return df
     
     def add_traces(self, fig: go.Figure, df: pd.DataFrame, row: int = 1):
