@@ -28,8 +28,8 @@ class CryptoMonitor:
         self._initialize_components()
         self._render_footer()
         # Auto-refresh functionality (always enabled)
-        time.sleep(AUTO_REFRESH_INTERVAL)
-        st.rerun()
+        # time.sleep(AUTO_REFRESH_INTERVAL)
+        # st.rerun()
 
     def _setup_page_config(self):
         """Configure Streamlit page settings."""
@@ -50,14 +50,28 @@ class CryptoMonitor:
         if not self.sidebar.selected_cryptos:
             st.warning("Please select at least one cryptocurrency to monitor.")
             return
-        print(self.states.crypto)
         self.price_display = PriceSummary(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.data_fetcher)
-        print(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.sidebar.selected_indicator, self.sidebar.indicator_params)
+
+        # PREPARE NAVIGATION AND HIGHLIGHTING DATA
+        highlighted_timestamps = {}
+        chart_positions = {}
+    
+        for crypto in self.sidebar.selected_cryptos:
+            # Get highlighted timestamps for each crypto
+            highlight_key = f"highlighted_candles_{crypto}"
+            highlighted_timestamps[crypto] = st.session_state.get(highlight_key, [])
+
+            # Get chart navigation position for each crypto
+            nav_key = f"chart_nav_{crypto}"
+            if nav_key not in st.session_state:
+                st.session_state[nav_key] = 0  # Start at first candlestick, or use len(df)-1 for latest
+            chart_positions[crypto] = st.session_state[nav_key]
+
         self.chart_creator = OHLCChartCreator(self.sidebar.selected_cryptos,
                                                self.sidebar.selected_timeframe,
                                                self.data_fetcher,
                                                self.sidebar.selected_indicator,
-                                               self.sidebar.indicator_params, self.states)
+                                               self.sidebar.indicator_params, self.states, highlighted_timestamps, chart_positions)
         self.backtest_settings = BacktestSettings(self.sidebar.selected_indicator, self.states)
         
     def _render_footer(self):

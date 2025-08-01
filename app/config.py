@@ -54,3 +54,10 @@ TF_TO_MS = {
             '4h':  4 * 60 * 60_000,
             '1d':  24 * 60 * 60_000,
         }
+
+# UI Stability
+STABLE_CHART_KEYS = True
+
+# Chart Navigation
+DEFAULT_CHART_POSITION = "latest"  # or "start"
+CHART_WINDOW_CANDLES = 60  # Number of candles to show around navigation position

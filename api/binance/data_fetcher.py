@@ -1,7 +1,9 @@
 import ccxt
 import streamlit as st
 import pandas as pd
+import pytz
 
+from datetime import datetime
 from app.config import *
 
 class BinanceDataFetcher:
@@ -31,6 +33,11 @@ class BinanceDataFetcher:
             # Remove volume column as it's not needed
             df = df.drop('volume', axis=1)
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            local_tz = datetime.now().astimezone().tzinfo
+            df['timestamp'] = df['timestamp'].dt.tz_localize('UTC').dt.tz_convert(local_tz)
+            # Remove timezone info to avoid display issues
+            df['timestamp'] = df['timestamp'].dt.tz_localize(None)
             return df
         except Exception as e:
             # Silently return None to prevent UI disruption
@@ -83,6 +90,11 @@ class BinanceDataFetcher:
         ])
         df.drop('volume', axis=1, inplace=True)
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+        local_tz = datetime.now().astimezone().tzinfo
+        df['timestamp'] = df['timestamp'].dt.tz_localize('UTC').dt.tz_convert(local_tz)
+        # Remove timezone info to avoid display issues
+        df['timestamp'] = df['timestamp'].dt.tz_localize(None)
         return df
     
     @st.cache_data(ttl=CACHE_TTL_PRICE, show_spinner=False)  # Hide spinner

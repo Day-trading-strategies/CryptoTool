@@ -11,11 +11,13 @@ from app.indicators.bollinger_bands import BollingerBandsIndicator
 from app.indicators.rsi import RSIIndicator
 from app.indicators.williams_r import WilliamsRIndicator
 from app.indicators.kdj import KDJIndicator
+from app.charts.chart_navigation import ChartNavigation
+from app.charts.candlestick_highlighter import CandlestickHighlighter
 
 class OHLCChartCreator:
     """Class to create OHLC charts with optional indicators."""
     
-    def __init__(self, selected_cryptos, timeframe, data_fetcher, selected_indicators, indicator_params, states):
+    def __init__(self, selected_cryptos, timeframe, data_fetcher, selected_indicators, indicator_params, states, highlighted_timestamps=None, chart_position=None):
         self.df = {crypto: [] for crypto in selected_cryptos}
         self.selected_cryptos = selected_cryptos
         self.selected_indicators = selected_indicators if selected_indicators is not None else []
@@ -23,9 +25,29 @@ class OHLCChartCreator:
         self.timeframe = timeframe
         self.data_fetcher = data_fetcher
         self.states = states
+        self.highlighted_timestamps = highlighted_timestamps
+        self.chart_position = chart_position
         self.render()
 
     def render(self):
+        st.markdown("""
+        <style>
+            /* Keep navigation buttons stable */
+            .stButton > button {
+                width: 100%;
+                height: 38px !important;
+                min-height: 38px !important;
+                max-height: 38px !important;
+            }
+
+            /* Prevent column shifting */
+            div[data-testid="column"] {
+                min-height: 50px !important;
+                display: flex;
+                align-items: center;
+            }
+        </style>""", unsafe_allow_html=True)
+
         st.subheader("📈 OHLC Charts")
         if self.states.bt_mode:
             print("bt_mode on")
@@ -35,15 +57,22 @@ class OHLCChartCreator:
                 self.timeframe, self.states.ob.start_date, self.states.ob.end_date
                 )
             self.df[crypto] = self.states.df
+            # Create component instances for backtest
+            navigator = ChartNavigation(crypto, self.df[crypto], self.states)
+            highlighter = CandlestickHighlighter(crypto, self.df[crypto], self.states)
+        
+            # Render navigation and highlighting controls
+            current_position = navigator.render()
+            highlighted_timestamps = highlighter.render()
 
-            fig = self.create_chart(crypto)
+            fig = self.create_chart(crypto, highlighted_timestamps, current_position)
             self.df[crypto].to_csv("backtest_data.csv", index=False)
 
             # if user chooses a hit point to test, create chart from start to hit point
             if self.states.chart_end:
                 temp_df = self.df[crypto].copy()
-                self.df[crypto] = self.df[crypto][self.df[crypto]["timestamp"] <= self.states.chart_end]
-                fig = self.create_chart(crypto)
+                # self.df[crypto] = self.df[crypto][self.df[crypto]["timestamp"] <= self.states.chart_end]
+                fig = self.create_chart(crypto, highlighted_timestamps, current_position)
                 self.df[crypto] = temp_df.copy()
             # else create chart with original data.
 
@@ -105,6 +134,9 @@ class OHLCChartCreator:
                             if st.button(ts, key=f"hit_btn_{idx}"):
                                 # parse back into a datetime
                                 self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                                chart_end_index = int(self.df[crypto][self.df[crypto]['timestamp'] == self.states.chart_end].index[0])
+                                self.states.chart_navigation[crypto] = intchart_end_index
+                                match_index = self.df[crypto][self.df[crypto]['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S") == self.states.chart_end.strftime("%Y-%m-%d %H:%M:%S")].index[0]
                                 st.rerun()
 
             else:
@@ -116,7 +148,19 @@ class OHLCChartCreator:
                 with tabs[idx]:
                     self.df[crypto] = self.data_fetcher.fetch_ohlc_data(AVAILABLE_CRYPTOS[crypto], self.timeframe)
                     if self.df[crypto] is not None:
-                        fig = self.create_chart(crypto)
+                        # Create component instances for this crypto/tab
+                        navigator = ChartNavigation(crypto, self.df[crypto], self.states)
+                        highlighter = CandlestickHighlighter(crypto, self.df[crypto], self.states)
+
+                        # Set unique keys for tab components
+                        navigator.tab_idx = idx
+                        highlighter.tab_idx = idx
+
+                        # Render navigation and highlighting controls
+                        current_position = navigator.render()
+                        highlighted_timestamps = highlighter.render()
+
+                        fig = self.create_chart(crypto, highlighted_timestamps, current_position)
                         if fig:
                             st.plotly_chart(
                                 fig, 
@@ -150,7 +194,16 @@ class OHLCChartCreator:
             crypto = self.selected_cryptos[0]
             self.df[crypto] = self.data_fetcher.fetch_ohlc_data(AVAILABLE_CRYPTOS[crypto], self.timeframe)
             if self.df[crypto] is not None:
-                fig = self.create_chart(crypto)
+                # Create component instances for single crypto
+                navigator = ChartNavigation(crypto, self.df[crypto], self.states)
+                highlighter = CandlestickHighlighter(crypto, self.df[crypto], self.states)
+            
+                # Render navigation and highlighting controls
+                current_position = navigator.render()
+                highlighted_timestamps = highlighter.render()
+            
+                # CREATE CHART
+                fig = self.create_chart(crypto, highlighted_timestamps, current_position)
                 if fig:
                     st.plotly_chart(
                         fig, 
@@ -185,8 +238,109 @@ class OHLCChartCreator:
             else:
                 st.error(f"Unable to load chart for {crypto}")
 
-    def create_chart(self, crypto) -> go.Figure:
-        """Create OHLC candlestick chart"""
+    def _add_highlight_markers(self, fig, df, highlighted_timestamps):
+        """Add star markers for highlighted timestamps"""
+        price_range = df['high'].max() - df['low'].min()
+        
+        for timestamp in highlighted_timestamps:
+            # Find matching row (exact or closest earlier)
+            matching_rows = df[df['timestamp'] == timestamp]
+            
+            if matching_rows.empty:
+                earlier_timestamps = df[df['timestamp'] <= timestamp]['timestamp']
+                if not earlier_timestamps.empty:
+                    closest_timestamp = earlier_timestamps.max()
+                    matching_rows = df[df['timestamp'] == closest_timestamp]
+                    is_approximate = True
+                else:
+                    continue
+            else:
+                is_approximate = False
+            
+            if not matching_rows.empty:
+                candle = matching_rows.iloc[0]
+                star_y = candle['high'] + (price_range * 0.05)
+                
+                star_color = '#FFA500' if is_approximate else '#FFD700'
+                border_color = '#FF6347' if is_approximate else '#FF8C00'
+                hover_suffix = '<br><i>Approximate match (closest earlier)</i>' if is_approximate else ''
+                
+                fig.add_trace(
+                    go.Scatter(
+                        x=[candle['timestamp']],
+                        y=[star_y],
+                        mode='markers',
+                        marker=dict(
+                            symbol='star',
+                            size=20,
+                            color=star_color,
+                            line=dict(width=2, color=border_color)
+                        ),
+                        name=f'Highlight {timestamp.strftime("%H:%M:%S")}',
+                        showlegend=False,
+                        hovertext=f'Highlighted Candlestick<br>Target: {timestamp.strftime("%Y-%m-%d %H:%M:%S")}<br>Actual: {candle["timestamp"].strftime("%Y-%m-%d %H:%M:%S")}<br>High: ${candle["high"]:.4f}<br>Close: ${candle["close"]:.4f}{hover_suffix}'
+                    ),
+                    row=1, col=1
+                )
+
+    def _add_auto_panning(self, fig, df, chart_position, highlighted_timestamps, timeframe):
+        """Add auto-panning functionality to focus on navigation or highlights"""
+        if chart_position is not None:
+            # Use navigation position
+            if 0 <= chart_position < len(df):
+                end_time = df.iloc[chart_position]['timestamp']
+                start_time = self._calculate_window_start(end_time, timeframe, df)
+                
+                fig.update_layout(
+                    xaxis=dict(
+                        range=[start_time, end_time],
+                        type='date'
+                    )
+                )
+        elif highlighted_timestamps:
+            # Use highlight positioning
+            latest_highlight = max(highlighted_timestamps)
+            
+            # Find actual timestamp to use
+            matching_rows = df[df['timestamp'] == latest_highlight]
+            if matching_rows.empty:
+                earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
+                if not earlier_timestamps.empty:
+                    end_time = earlier_timestamps.max()
+                else:
+                    end_time = latest_highlight
+            else:
+                end_time = latest_highlight
+            
+            start_time = self._calculate_window_start(end_time, timeframe, df)
+            
+            fig.update_layout(
+                xaxis=dict(
+                    range=[start_time, end_time],
+                    type='date'
+                )
+            )
+
+    def _calculate_window_start(self, end_time, timeframe, df):
+        """Calculate the start time for the chart window"""
+        timeframe_minutes = {
+            '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+            '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440
+        }
+        
+        tf_minutes = timeframe_minutes.get(timeframe, 60)
+        time_window_minutes = tf_minutes * 60  # Show ~60 candles
+        start_time = end_time - pd.Timedelta(minutes=time_window_minutes)
+        
+        # Ensure start_time is not before data range
+        data_start = df['timestamp'].min()
+        if start_time < data_start:
+            start_time = data_start
+        
+        return start_time
+
+    def create_chart(self, crypto, highlighted_timestamps=None, chart_position=None) -> go.Figure:
+        """Create OHLC candlestick chart with optional highlighting and navigation"""
         if self.df[crypto] is None or self.df[crypto].empty:
             return None
                 
@@ -224,8 +378,12 @@ class OHLCChartCreator:
             ),
             row=1, col=1
         )
-        fig.update_yaxes(title_text='Price (USDT)', row=1, col=1)
 
+        if highlighted_timestamps:
+            self._add_highlight_markers(fig, self.df[crypto], highlighted_timestamps)
+
+        fig.update_yaxes(title_text='Price (USDT)', row=1, col=1)
+        
         for ind in self.selected_indicators:
             if ind == "RSI":
                 indicator = RSIIndicator(**self.indicator_params.get("RSI", {}))
@@ -255,5 +413,8 @@ class OHLCChartCreator:
             font=dict(color='white'),
             dragmode='pan'  # Set pan as default drag mode in layout
         )
-        
+            
+        if chart_position is not None or highlighted_timestamps:
+            self._add_auto_panning(fig, self.df[crypto], chart_position, highlighted_timestamps, self.timeframe)
+            
         return fig

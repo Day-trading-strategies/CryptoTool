@@ -12,7 +12,11 @@ class SessionStateManager:
         "crypto": None,
         "hit_index": 0,
         "chart_end": None,
-        "ob": None
+        "ob": None,
+        "highlighted_candles": {},
+        "chart_navigation": {}, 
+        "previous_timeframes": {},
+        "previous_highlights": {}   
     }
     def __init__(self):
         self._initialize_defaults()
@@ -77,3 +81,35 @@ class SessionStateManager:
     @chart_end.setter
     def chart_end(self, value):
         st.session_state["chart_end"] = value
+
+    @property
+    def highlighted_candles(self) -> dict:
+        return st.session_state["highlighted_candles"]
+
+    @highlighted_candles.setter
+    def highlighted_candles(self, value: dict):
+        st.session_state["highlighted_candles"] = value
+
+    @property
+    def chart_navigation(self) -> dict:
+        return st.session_state["chart_navigation"]
+
+    @chart_navigation.setter
+    def chart_navigation(self, value: dict):
+        st.session_state["chart_navigation"] = value
+
+    @property
+    def previous_timeframes(self) -> dict:
+        return st.session_state["previous_timeframes"]
+    
+    @previous_timeframes.setter
+    def previous_timeframes(self, value: dict):
+        st.session_state["previous_timeframes"] = value
+    
+    @property
+    def previous_highlights(self) -> dict:
+        return st.session_state["previous_highlights"]
+    
+    @previous_highlights.setter
+    def previous_highlights(self, value: dict):
+        st.session_state["previous_highlights"] = value
