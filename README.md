@@ -38,7 +38,7 @@ A real-time cryptocurrency price monitoring web application built with Python, S
 
 4. **Run the application**:
    ```bash
-   streamlit run crypto_monitor.py
+   streamlit run main.py
    ```
 
 5. **Open your browser** and navigate to `http://localhost:8501`

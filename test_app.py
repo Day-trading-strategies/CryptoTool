@@ -14,7 +14,7 @@ try:
     import plotly.graph_objects as go
     import pandas as pd
     import ccxt
-    from config import *
+    from app.config import *
     print("✅ All imports successful!")
     
     # Test exchange connection
