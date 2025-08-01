@@ -135,7 +135,7 @@ class OHLCChartCreator:
                                 # parse back into a datetime
                                 self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
                                 chart_end_index = int(self.df[crypto][self.df[crypto]['timestamp'] == self.states.chart_end].index[0])
-                                self.states.chart_navigation[crypto] = intchart_end_index
+                                self.states.chart_navigation[crypto] = chart_end_index
                                 match_index = self.df[crypto][self.df[crypto]['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S") == self.states.chart_end.strftime("%Y-%m-%d %H:%M:%S")].index[0]
                                 st.rerun()
 
