@@ -1,0 +1,1856 @@
+diff --git a/README.md b/README.md
+index 3049575..a68b34e 100644
+--- a/README.md
++++ b/README.md
+@@ -38,7 +38,7 @@ A real-time cryptocurrency price monitoring web application built with Python, S
+ 
+ 4. **Run the application**:
+    ```bash
+-   streamlit run crypto_monitor.py
++   streamlit run main.py
+    ```
+ 
+ 5. **Open your browser** and navigate to `http://localhost:8501`
+diff --git a/api/binance/data_fetcher.py b/api/binance/data_fetcher.py
+new file mode 100644
+index 0000000..8e4e481
+--- /dev/null
++++ b/api/binance/data_fetcher.py
+@@ -0,0 +1,98 @@
++import ccxt
++import streamlit as st
++import pandas as pd
++
++from app.config import *
++
++class BinanceDataFetcher:
++    def __init__(self):
++        self.exchange = ccxt.binance({
++            'sandbox': False,
++            'rateLimit': RATE_LIMIT,
++            'enableRateLimit': ENABLE_RATE_LIMIT,
++        })
++        
++        # Available cryptocurrencies (from config)
++        self.available_cryptos = AVAILABLE_CRYPTOS
++        
++        # Timeframe mapping (from config)
++        self.timeframes = TIMEFRAMES
++    
++        self.separate_ax_indicators = SEPARATE_AX_INDICATORS
++
++    @st.cache_data(ttl=CACHE_TTL_OHLC, show_spinner=False)  # Hide spinner
++    def fetch_ohlc_data(_self, symbol, timeframe, limit=100):
++        """Fetch OHLC data from exchange"""
++        try:
++            ohlcv = _self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
++            if not ohlcv:  # Check if data is empty
++                return None
++            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
++            # Remove volume column as it's not needed
++            df = df.drop('volume', axis=1)
++            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
++            return df
++        except Exception as e:
++            # Silently return None to prevent UI disruption
++            return None
++        
++    @st.cache_data(ttl=CACHE_TTL_PRICE, show_spinner=False)  # Hide spinner
++    def fetch_ohlc_data_range(_self, symbol, timeframe, start_date, end_date):
++        """
++        Fetch all OHLC bars from start_date up to end_date,
++        without explicitly setting a `limit`—we rely on CCXT’s default.
++        """
++        all_bars = []
++        # turns dates into timestamps
++        since_ms = int(start_date.timestamp() * 1_000)
++        end_ms   = int(end_date.timestamp()   * 1_000)
++        step     = TF_TO_MS[timeframe]
++
++        while since_ms <= end_ms:
++            # no `limit` argument here → CCXT/binance uses its default (500)
++            ohlcv = _self.exchange.fetch_ohlcv(
++                symbol,
++                timeframe,
++                since=since_ms
++            )
++            if not ohlcv:
++                break
++
++            # keep only bars up to end_date
++            page = [bar for bar in ohlcv if bar[0] <= end_ms]
++            if not page:
++                break
++
++            all_bars.extend(page)
++            last_ts = page[-1][0]
++
++            # stop if we’ve already covered end_ms
++            if last_ts >= end_ms:
++                break
++
++            # advance since to one bar past the last timestamp
++            since_ms = last_ts + step
++
++            # if we got fewer than the default page-size (500), we’re done
++            if len(ohlcv) < 500:
++                break
++
++        # build DataFrame
++        df = pd.DataFrame(all_bars, columns=[
++            'timestamp','open','high','low','close','volume'
++        ])
++        df.drop('volume', axis=1, inplace=True)
++        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
++        return df
++    
++    @st.cache_data(ttl=CACHE_TTL_PRICE, show_spinner=False)  # Hide spinner
++    def get_current_price(_self, symbol):
++        """Get current price for a symbol"""
++        try:
++            ticker = _self.exchange.fetch_ticker(symbol)
++            if not ticker or 'last' not in ticker:  # Check if ticker data is valid
++                return None, None
++            return ticker['last'], ticker.get('percentage', 0)
++        except Exception as e:
++            # Silently return None to prevent UI disruption
++            return None, None
+\ No newline at end of file
+diff --git a/app/back_tester.py b/app/back_tester.py
+new file mode 100644
+index 0000000..f5f7b89
+--- /dev/null
++++ b/app/back_tester.py
+@@ -0,0 +1,91 @@
++from datetime import datetime, time
++import pandas as pd
++
++from api.binance.data_fetcher import BinanceDataFetcher
++from app.config import *
++
++class CryptoBacktester:
++    def __init__(self, start_date, end_date, conditions:dict, states):
++        self.start_date = datetime.combine(start_date, time.min)
++        self.end_date   = datetime.combine(end_date, time.max)
++        self.indicator_conditions = conditions
++        self.states = states
++        
++    # Will return timestamps of when all the value become true.
++    def find_hits(self, df: pd.DataFrame, epsilon: float = 2.0):       
++        conds = []
++
++        # RSI Upper and Lower bound conditions
++        has_rsi_up   = "RSI_U" in self.indicator_conditions and self.indicator_conditions["RSI_U"] is not None
++        has_rsi_down = "RSI_L" in self.indicator_conditions and self.indicator_conditions["RSI_L"] is not None
++
++        if has_rsi_up and has_rsi_down:
++            up   = df["rsi"] >= self.indicator_conditions["RSI_U"]
++            down = df["rsi"] <= self.indicator_conditions["RSI_L"]
++            conds.append(up | down)
++        else:
++            if has_rsi_up:
++                conds.append(df["rsi"] >= self.indicator_conditions["RSI_U"])
++            if has_rsi_down:
++                conds.append(df["rsi"] <= self.indicator_conditions["RSI_L"])
++
++        if "ht_buy" in self.indicator_conditions:
++            conds.append(df["ht_up"] == True)
++        if "ht_sell" in self.indicator_conditions:
++            conds.append(df["ht_up"] == False)
++        
++        # William % Range Conditions
++        has_wr_up   = "WR_U" in self.indicator_conditions and self.indicator_conditions["WR_U"] is not None
++        has_wr_down = "WR_L" in self.indicator_conditions and self.indicator_conditions["WR_L"] is not None
++
++        if has_wr_up and has_wr_down:
++            up   = df["WR"] >= self.indicator_conditions["WR_U"]
++            down = df["WR"] <= self.indicator_conditions["WR_L"]
++            conds.append(up | down)
++        else:
++            if has_wr_up:
++                conds.append(df["WR"] >= self.indicator_conditions["WR_U"])
++            if has_wr_down:
++                conds.append(df["WR"] <= self.indicator_conditions["WR_L"])
++
++        # Bollinger Band touches
++        if "Bollinger Top" in self.indicator_conditions:
++            conds.append(df["high"] >= df["bb_upper"])
++
++        if "Bollinger Bottom" in self.indicator_conditions:
++            conds.append(df["low"] <= df["bb_lower"])
++
++        if "Bollinger Either" in self.indicator_conditions:
++            conds.append(
++                (df["high"] >= df["bb_upper"])
++                | (df["low"] <= df["bb_lower"])
++            )
++
++        # KDJ intersections
++        if "KDJ" in self.indicator_conditions:
++            K, D, J = df["%K"], df["%D"], df["%J"]
++            kd_up   = (K.shift(1) < D.shift(1)) & (K >= D)
++            kd_down = (K.shift(1) > D.shift(1)) & (K <= D)
++            kd_cross = kd_up | kd_down
++
++            kj_up   = (K.shift(1) < J.shift(1)) & (K >= J)
++            kj_down = (K.shift(1) > J.shift(1)) & (K <= J)
++            kj_cross = kj_up | kj_down
++
++            # require both crossings for a true KDJ “intersection”:
++            conds.append(kd_cross & kj_cross)
++            # epsilon threshold (you can also make this configurable)
++            eps = epsilon
++            # only True where all three lines lie within eps of each other
++            intersect = ((K - D).abs() < eps) & ((K - J).abs() < eps)
++            conds.append(intersect | (kd_cross & kj_cross))
++
++        # combine into an “all‐true” mask        
++        all_true = pd.Series(True, index=df.index)
++        for c in conds:
++            all_true &= c
++        # 3) flag only the *first* True of each run
++        first_hits = all_true & (~all_true.shift(fill_value=False))
++
++        # Return only the timestamps that made it through all tests
++        return df.loc[first_hits].reset_index(drop=True)
+diff --git a/app/backtest_settings/backtest_settings.py b/app/backtest_settings/backtest_settings.py
+new file mode 100644
+index 0000000..14a4de4
+--- /dev/null
++++ b/app/backtest_settings/backtest_settings.py
+@@ -0,0 +1,100 @@
++import streamlit as st
++from datetime import datetime, timedelta
++
++from app.back_tester import CryptoBacktester
++from app.config import *
++
++class BacktestSettings:
++    """Handles Backtesting conditions expander"""
++    def __init__(self, selected_indicators, states):
++        self.selected_crypto = None
++        self.start_date = None
++        self.end_date = None
++        self.selected_indicators = selected_indicators
++        self.states = states
++        self.render()
++
++    def render(self):
++        """Render the sidebar components"""
++        with st.expander("Backtesting Settings"):
++            self.render_dates()
++            self.render_crypto()
++            self.render_conditions()
++
++    def render_dates(self):
++        self.start_date = st.date_input(
++            "Start Date",
++            value=datetime.now().date() - timedelta(days=30),
++            key="bt_start"
++        )
++        self.end_date = st.date_input(
++            "End Date",
++            value=datetime.now().date(),
++            key="bt_end"
++        )
++
++    def render_crypto(self):
++        crypto = st.selectbox(
++            "Select Crypto:",
++            options=list(AVAILABLE_CRYPTOS.keys()),
++            index=0  # Default to BTC
++            )
++        self.states.crypto = crypto
++        
++    def render_conditions(self):
++        st.markdown("**Indicator Conditions(select indicator in sidebar to show.)**")
++        
++        indicator_conditions = {}
++        if "RSI" in self.selected_indicators:
++            indicator_conditions["RSI_U"] = st.number_input("RSI Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_rsi_u")
++            indicator_conditions["RSI_L"] = st.number_input("RSI Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_rsi_l")
++
++        # William %R conditions
++        if "William % Range" in self.selected_indicators:
++            indicator_conditions["WR_U"] = st.number_input(
++                    "William %R Upper Bound(e.g. -20", -100.0, 0.0, None, step=0.1, key="bt_wr_u"
++                )
++            indicator_conditions["WR_L"] = st.number_input(
++                    "William %R Lower Bound(e.g. -80)", -100.0, 0.0, None, step=0.1, key="bt_wr_l"
++                )
++        # Half Trend
++        if "Half Trend" in self.selected_indicators:
++            ht_cond = st.selectbox(
++                "Half Trend Conditions",
++                options=[
++                    "Buy Signal",
++                    "Sell Signal"],
++                index=0
++                )
++            if ht_cond == "Buy Signal":
++                indicator_conditions["ht_buy"] = True
++            else:
++                indicator_conditions["ht_sell"] = True
++
++        if "Bollinger Band" in self.selected_indicators:
++            # Bollinger Band
++            if st.checkbox('Price "High" Touches Top BB'):
++                indicator_conditions["Bollinger Top"] = True
++            if st.checkbox('Price "Low" Touches Bottom BB'):
++                indicator_conditions["Bollinger Bottom"] = True
++            if st.checkbox("Price Touches Either"):
++                indicator_conditions["Bollinger Either"] = True
++
++        
++        # KDJ conditions
++        if "KDJ" in self.selected_indicators:
++            if st.checkbox("KDJ Intersection", key="bt_chk_kdj"):
++                indicator_conditions["KDJ"] = True
++        
++
++        run_bt = st.button("▶ Run Backtest", key="bt_run")
++
++        if run_bt:
++            self.states.bt_mode = True
++            self.states.ob = CryptoBacktester(
++                            self.start_date,
++                            self.end_date,
++                            indicator_conditions,
++                            self.states)
++            # st.rerun()
++
+diff --git a/app/charts/ohlc_chart.py b/app/charts/ohlc_chart.py
+new file mode 100644
+index 0000000..29d8a7d
+--- /dev/null
++++ b/app/charts/ohlc_chart.py
+@@ -0,0 +1,259 @@
++import plotly.graph_objects as go
++from plotly.subplots import make_subplots
++import streamlit as st
++import pandas as pd
++from datetime import datetime
++
++from app.config import *
++
++from app.indicators.half_trend import HalfTrendIndicator
++from app.indicators.bollinger_bands import BollingerBandsIndicator
++from app.indicators.rsi import RSIIndicator
++from app.indicators.williams_r import WilliamsRIndicator
++from app.indicators.kdj import KDJIndicator
++
++class OHLCChartCreator:
++    """Class to create OHLC charts with optional indicators."""
++    
++    def __init__(self, selected_cryptos, timeframe, data_fetcher, selected_indicators, indicator_params, states):
++        self.df = {crypto: [] for crypto in selected_cryptos}
++        self.selected_cryptos = selected_cryptos
++        self.selected_indicators = selected_indicators if selected_indicators is not None else []
++        self.indicator_params = indicator_params
++        self.timeframe = timeframe
++        self.data_fetcher = data_fetcher
++        self.states = states
++        self.render()
++
++    def render(self):
++        st.subheader("📈 OHLC Charts")
++        if self.states.bt_mode:
++            print("bt_mode on")
++            crypto = self.states.crypto
++            self.states.df = self.data_fetcher.fetch_ohlc_data_range(
++                AVAILABLE_CRYPTOS[crypto], 
++                self.timeframe, self.states.ob.start_date, self.states.ob.end_date
++                )
++            self.df[crypto] = self.states.df
++
++            fig = self.create_chart(crypto)
++            self.df[crypto].to_csv("backtest_data.csv", index=False)
++
++            # if user chooses a hit point to test, create chart from start to hit point
++            if self.states.chart_end:
++                temp_df = self.df[crypto].copy()
++                self.df[crypto] = self.df[crypto][self.df[crypto]["timestamp"] <= self.states.chart_end]
++                fig = self.create_chart(crypto)
++                self.df[crypto] = temp_df.copy()
++            # else create chart with original data.
++
++            if fig:
++                st.plotly_chart(
++                    fig, 
++                    use_container_width=True,
++                    config={
++                        'displayModeBar': True,
++                        'scrollZoom': True,  # Enable mouse scroll zoom
++                        'doubleClick': 'reset',  # Double-click to reset zoom
++                        'showTips': False,
++                        'displaylogo': False,
++                        'dragmode': 'pan',  # Set pan as default mode
++                        'modeBarButtonsToRemove': [
++                            'downloadPlot',
++                            'toImage',
++                            'lasso2d',
++                            'select2d',
++                            'zoom2d',         # Remove zoom tool
++                            'zoomIn2d',       # Remove zoom in button
++                            'zoomOut2d',      # Remove zoom out button
++                            'autoScale2d'     # Remove auto scale button
++                        ]
++                    }
++                )
++                hits = self.states.ob.find_hits(self.df[crypto])
++                hits["timestamp"].to_csv("filtered_backtest.csv", index=False) 
++
++                timestamps = hits["timestamp"].tolist()
++                
++                if self.states.chart_end in timestamps:
++                    self.states.hit_index = timestamps.index(self.states.chart_end)
++                else:
++                    self.states.hit_index = 0
++
++                # render a “Next →” button
++                if timestamps and st.button("Next →", key="next_hit"):
++                    next_idx = (self.states.hit_index + 1) % len(timestamps)
++                    self.states.hit_index = next_idx
++                    self.states.chart_end = timestamps[next_idx]
++                    st.rerun()
++                        
++                try:
++                    filtered = pd.read_csv("filtered_backtest.csv")
++                    filtered["timestamp"] = pd.to_datetime(filtered["timestamp"])
++                    # turn timestamps into strings for display
++                    times = filtered["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
++                except FileNotFoundError:
++                    times = []
++
++                # Show them in an expander as clickable buttons
++                with st.expander(f"Found {len(timestamps)} hit points."):
++                    if not times:
++                        st.write("No hits found (or filtered_backtest.csv not present).")
++                    else:
++                        for idx, ts in enumerate(times):
++                            # each timestamp is a button; clicking does nothing for now
++                            if st.button(ts, key=f"hit_btn_{idx}"):
++                                # parse back into a datetime
++                                self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
++                                st.rerun()
++
++            else:
++                st.error(f"Unable to Backtest Chart")
++        # Create tabs for each cryptocurrency
++        elif len(self.selected_cryptos) > 1:
++            tabs = st.tabs(self.selected_cryptos)
++            for idx, crypto in enumerate(self.selected_cryptos):
++                with tabs[idx]:
++                    self.df[crypto] = self.data_fetcher.fetch_ohlc_data(AVAILABLE_CRYPTOS[crypto], self.timeframe)
++                    if self.df[crypto] is not None:
++                        fig = self.create_chart(crypto)
++                        if fig:
++                            st.plotly_chart(
++                                fig, 
++                                use_container_width=True,
++                                config={
++                                    'displayModeBar': True,
++                                    'scrollZoom': True,  # Enable mouse scroll zoom
++                                    'doubleClick': 'reset',  # Double-click to reset zoom
++                                    'showTips': False,
++                                    'displaylogo': False,
++                                    'dragmode': 'pan',  # Set pan as default mode
++                                    'modeBarButtonsToRemove': [
++                                        'downloadPlot',
++                                        'toImage',
++                                        'lasso2d',
++                                        'select2d',
++                                        'zoom2d',         # Remove zoom tool
++                                        'zoomIn2d',       # Remove zoom in button
++                                        'zoomOut2d',      # Remove zoom out button
++                                        'autoScale2d'     # Remove auto scale button
++                                    ]
++                                }
++                            )
++
++                            # Display data table
++                            with st.expander(f"📋 {crypto} Data Table"):
++                                st.dataframe(self.df[crypto].tail(10).iloc[::-1], use_container_width=True)
++                    else:
++                        st.error(f"Unable to load chart for {crypto}")
++        else:
++            crypto = self.selected_cryptos[0]
++            self.df[crypto] = self.data_fetcher.fetch_ohlc_data(AVAILABLE_CRYPTOS[crypto], self.timeframe)
++            if self.df[crypto] is not None:
++                fig = self.create_chart(crypto)
++                if fig:
++                    st.plotly_chart(
++                        fig, 
++                        use_container_width=True,
++                        config={
++                            'displayModeBar': True,
++                            'modeBarButtonsToAdd': [
++                                ['drawrect']
++                            ],
++                            'scrollZoom': True,  # Enable mouse scroll zoom
++                            'doubleClick': 'reset',  # Double-click to reset zoom
++                            'showTips': False,
++                            'displaylogo': False,
++                            'dragmode': 'pan',  # Set pan as default mode
++                            'modeBarButtonsToRemove': [
++                                'downloadPlot',
++                                'toImage',
++                                'lasso2d',
++                                'select2d',
++                                'zoom2d',         # Remove zoom tool
++                                'zoomIn2d',       # Remove zoom in button
++                                'zoomOut2d',      # Remove zoom out button
++                                'autoScale2d'     # Remove auto scale button
++                            ]
++                            
++                        }
++                    )
++                    
++                    # Display data table
++                    with st.expander(f"📋 {crypto} Data Table"):
++                        st.dataframe(self.df[crypto].tail(10).iloc[::-1], use_container_width=True)
++            else:
++                st.error(f"Unable to load chart for {crypto}")
++
++    def create_chart(self, crypto) -> go.Figure:
++        """Create OHLC candlestick chart"""
++        if self.df[crypto] is None or self.df[crypto].empty:
++            return None
++                
++        sep_inds = []
++        for ind in self.selected_indicators:
++            if ind in SEPARATE_AX_INDICATORS:
++                sep_inds.append(ind)
++        
++        # Changes height of chart as more indicators are added.
++        n_rows = 1 + len(sep_inds)
++        weights = [3] + [1] * len(sep_inds)
++        total_weight = sum(weights)
++        row_heights = [w/total_weight for w in weights]
++
++        fig = make_subplots(
++            rows=n_rows, cols=1,
++            shared_xaxes = True,
++            vertical_spacing=0.02,
++            row_heights = row_heights,
++            subplot_titles=(f'{crypto} Price Chart ({self.timeframe})',)
++        )
++        # Candlestick chart
++        fig.add_trace(
++            go.Candlestick(
++                x=self.df[crypto]['timestamp'],
++                open=self.df[crypto]['open'],
++                high=self.df[crypto]['high'],
++                low=self.df[crypto]['low'],
++                close=self.df[crypto]['close'],
++                name='Price',
++                increasing_line_color=BULLISH_COLOR,
++                decreasing_line_color=BEARISH_COLOR,
++                increasing_fillcolor=BULLISH_COLOR,
++                decreasing_fillcolor=BEARISH_COLOR
++            ),
++            row=1, col=1
++        )
++        fig.update_yaxes(title_text='Price (USDT)', row=1, col=1)
++
++        for ind in self.selected_indicators:
++            if ind == "RSI":
++                indicator = RSIIndicator(**self.indicator_params.get("RSI", {}))
++            elif ind == "Bollinger Band":
++                indicator = BollingerBandsIndicator(**self.indicator_params.get("Bollinger Band", {}))
++            elif ind == "KDJ":
++                indicator = KDJIndicator(**self.indicator_params.get("KDJ", {}))
++            elif ind == "Half Trend":
++                indicator = HalfTrendIndicator(**self.indicator_params.get("Half Trend", {}))
++            elif ind == "William % Range":
++                indicator = WilliamsRIndicator(**self.indicator_params.get("William % Range", {}))
++            else:
++                continue
++
++            self.df[crypto] = indicator.calculate(self.df[crypto])
++
++            indicator.add_traces(fig, self.df[crypto], 1 if ind not in sep_inds else sep_inds.index(ind) + 2)
++            
++        # Update layout
++        fig.update_layout(
++            title=f'{AVAILABLE_CRYPTOS[crypto]} - {self.timeframe} Chart',
++            xaxis_rangeslider_visible=False,
++            height=CHART_HEIGHT,
++            showlegend=False,
++            plot_bgcolor='#0e1117',
++            paper_bgcolor='#0e1117',
++            font=dict(color='white'),
++            dragmode='pan'  # Set pan as default drag mode in layout
++        )
++        
++        return fig
+\ No newline at end of file
+diff --git a/app/charts/price_summary.py b/app/charts/price_summary.py
+new file mode 100644
+index 0000000..dfff488
+--- /dev/null
++++ b/app/charts/price_summary.py
+@@ -0,0 +1,30 @@
++import streamlit as st
++
++from app.config import *
++class PriceSummary:
++    """Class to create a summary of current prices for multiple cryptocurrencies."""
++    
++    def __init__(self, selected_cryptos, timeframe, data_fetcher):
++        self.selected_cryptos = selected_cryptos
++        self.timeframe = timeframe
++        self.data_fetcher = data_fetcher
++        self.display()
++
++    def display(self):
++        """Display price summary cards"""
++        cols = st.columns(len(self.selected_cryptos))
++        
++        for idx, crypto in enumerate(self.selected_cryptos):
++            symbol = AVAILABLE_CRYPTOS[crypto]
++            current_price, price_change = self.data_fetcher.get_current_price(symbol)
++            
++            with cols[idx]:
++                if current_price is not None:
++                    change_color = "🟢" if price_change >= 0 else "🔴"
++                    st.metric(
++                        label=f"{crypto}/USDT",
++                        value=f"${current_price:,.4f}",
++                        delta=f"{price_change:+.2f}%"
++                    )
++                else:
++                    st.error(f"Unable to fetch {crypto} data")
+\ No newline at end of file
+diff --git a/config.py b/app/config.py
+similarity index 71%
+rename from config.py
+rename to app/config.py
+index c0df846..b9cbf8d 100644
+--- a/config.py
++++ b/app/config.py
+@@ -10,6 +10,7 @@ AVAILABLE_CRYPTOS = {
+     'SOL': 'SOL/USDT'
+ }
+ 
++AVAILABLE_INDICATORS = ["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
+ 
+ # Available timeframes
+ TIMEFRAMES = {
+@@ -43,3 +44,13 @@ BEARISH_COLOR = '#ff4444'
+ EXCHANGE_NAME = 'binance'
+ RATE_LIMIT = 1200
+ ENABLE_RATE_LIMIT = True
++
++TF_TO_MS = {
++            '1m':  60_000,
++            '3m':  3 * 60_000,
++            '5m':  5 * 60_000,
++            '15m': 15 * 60_000,
++            '1h':  60 * 60_000,
++            '4h':  4 * 60 * 60_000,
++            '1d':  24 * 60 * 60_000,
++        }
+diff --git a/app/crypto_monitor.py b/app/crypto_monitor.py
+new file mode 100644
+index 0000000..5e88f9f
+--- /dev/null
++++ b/app/crypto_monitor.py
+@@ -0,0 +1,73 @@
++import streamlit as st
++import time
++
++# Import all our components
++from api.binance.data_fetcher import BinanceDataFetcher
++from app.sidebar.sidebar import Sidebar
++from app.charts.ohlc_chart import OHLCChartCreator
++from app.charts.price_summary import PriceSummary
++from app.backtest_settings.backtest_settings import BacktestSettings
++from app.state_manager import SessionStateManager
++
++from app.config import *
++
++class CryptoMonitor:
++    """Main application class for the Crypto Price Monitor."""
++    
++    def __init__(self):
++        """Initialize the application components."""
++        self.data_fetcher = None
++        self.sidebar = None
++        self.price_display = None
++        self.chart_creator = None
++        self.backtest_settings = None
++        self.states = SessionStateManager()
++    
++    def run(self):
++        self._setup_page_config()
++        self._initialize_components()
++        self._render_footer()
++        # Auto-refresh functionality (always enabled)
++        time.sleep(AUTO_REFRESH_INTERVAL)
++        st.rerun()
++
++    def _setup_page_config(self):
++        """Configure Streamlit page settings."""
++        st.title("🚀 Crypto Price Monitor")
++        st.markdown("---")
++
++        st.set_page_config(
++            page_title="Crypto Price Monitor",
++            page_icon="₿",
++            layout="wide",
++            initial_sidebar_state="expanded"
++        )
++    
++    def _initialize_components(self):
++        """Initialize all application components."""
++        self.data_fetcher = BinanceDataFetcher()
++        self.sidebar = Sidebar()
++        if not self.sidebar.selected_cryptos:
++            st.warning("Please select at least one cryptocurrency to monitor.")
++            return
++        print(self.states.crypto)
++        self.price_display = PriceSummary(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.data_fetcher)
++        print(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.sidebar.selected_indicator, self.sidebar.indicator_params)
++        self.chart_creator = OHLCChartCreator(self.sidebar.selected_cryptos,
++                                               self.sidebar.selected_timeframe,
++                                               self.data_fetcher,
++                                               self.sidebar.selected_indicator,
++                                               self.sidebar.indicator_params, self.states)
++        self.backtest_settings = BacktestSettings(self.sidebar.selected_indicator, self.states)
++        
++    def _render_footer(self):
++        # Footer
++        st.markdown("---")
++        st.markdown(
++            """
++            <div style='text-align: center; color: #666; font-size: 12px;'>
++            💡 Data provided by Binance API • Auto-refresh every 10 seconds • Built with Streamlit & Plotly
++            </div>
++            """, 
++            unsafe_allow_html=True
++        )
+\ No newline at end of file
+diff --git a/app/indicators/bollinger_bands.py b/app/indicators/bollinger_bands.py
+new file mode 100644
+index 0000000..5de067e
+--- /dev/null
++++ b/app/indicators/bollinger_bands.py
+@@ -0,0 +1,64 @@
++import pandas as pd
++import ta
++import plotly.graph_objects as go
++
++from .indicator import Indicator
++
++class BollingerBandsIndicator(Indicator):
++    """Bollinger Bands indicator."""
++    
++    def __init__(self, window: int = 20, window_dev: float = 2.0):
++        super().__init__("Bollinger Band")
++        self.window = window
++        self.window_dev = window_dev
++    
++    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
++        # Calculate Bollinger Bands
++        bb = ta.volatility.BollingerBands(
++            close=df["close"], 
++            window=self.window, 
++            window_dev=self.window_dev
++        )
++        
++        # Add to DataFrame
++        df = df.copy()
++        df["bb_middle"] = bb.bollinger_mavg()
++        df["bb_upper"] = bb.bollinger_hband()
++        df["bb_lower"] = bb.bollinger_lband()
++        return df
++    
++    def add_traces(self, fig: go.Figure, df: pd.DataFrame, row: int = 1):
++        """Add Bollinger Bands traces to figure."""
++        fig.add_trace(
++            go.Scatter(
++                x=df["timestamp"],
++                y=df["bb_middle"],
++                mode="lines",
++                line=dict(color="rgba(255,0,0,1)", width=1),
++                opacity = 0.6,
++                name="BB Middle (20)"
++            ),
++            row=row, col=1
++        )
++        fig.add_trace(
++            go.Scatter(
++                x=df["timestamp"],
++                y=df["bb_upper"],
++                mode="lines",
++                line=dict(color="rgba(51,153,255,0.8)", width=1),
++                name="BB Upper (20,+2σ)",
++                hovertemplate="Upper: %{y:.2f}<extra></extra>"
++            ),
++            row=row, col=1
++        )
++        fig.add_trace(
++            go.Scatter(
++                x=df["timestamp"],
++                y=df["bb_lower"],
++                mode="lines",
++                line=dict(color="rgba(51,153,255,0.8)", width=1),
++                name="BB Lower (20,−2σ)",
++                hovertemplate="Lower: %{y:.2f}<extra></extra>"
++            ),
++            row=row, col=1
++        )
+\ No newline at end of file
+diff --git a/app/indicators/half_trend.py b/app/indicators/half_trend.py
+new file mode 100644
+index 0000000..b9fbb8a
+--- /dev/null
++++ b/app/indicators/half_trend.py
+@@ -0,0 +1,123 @@
++import pandas as pd
++import ta
++import plotly.graph_objects as go
++import numpy as np
++
++from .indicator import Indicator
++
++class HalfTrendIndicator(Indicator):
++    """Half Trend indicator."""
++    
++    def __init__(self, amplitude=5):
++        super().__init__("Half Trend")
++        self.amp = amplitude
++    
++    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
++        # Half Trend calculation based on ATR
++        high   = df["high"]
++        low    = df["low"]
++        close  = df["close"]
++        
++        # rolling stats
++        close_ma      = close.rolling(window=self.amp, min_periods=1).mean()
++        highest_high  = high.rolling(window=self.amp, min_periods=1).max()
++        lowest_low    = low.rolling(window=self.amp, min_periods=1).min()
++        
++        hl_t = np.empty(len(df), dtype=float)
++        hl_t[0] = close.iloc[0]  # init on first bar
++        
++        # 2) loop exactly as Pine's `switch`:
++        for i in range(1, len(df)):
++            prev = hl_t[i-1]
++            
++            if close_ma.iat[i] < prev and highest_high.iat[i] < prev:
++                # price is below last trend AND the recent highs never exceeded it
++                hl_t[i] = highest_high.iat[i]
++            elif close_ma.iat[i] > prev and lowest_low.iat[i] > prev:
++                # price is above last trend AND the recent lows never dipped below it
++                hl_t[i] = lowest_low.iat[i]
++            else:
++                # otherwise carry forward
++                hl_t[i] = prev
++
++        half_trend = pd.Series(hl_t, index=df.index, name="halftrend")
++        df["half_trend"] = half_trend
++        return df
++    
++    def add_traces(self, fig: go.Figure, df: pd.DataFrame, row: int = 1):
++        """Add Half Trend trace to figure."""
++        df = self.calculate(df)
++        ht = df['half_trend'].values
++
++        # build Pine‐style carry‐forward trend flag
++        is_up = np.empty(len(ht), dtype=bool)
++        is_up[0] = True  # start assuming “up” (or choose False if you prefer)
++        for i in range(1, len(ht)):
++            # crossover? (just like ta.crossover)
++            if ht[i] > ht[i-1] and ht[i-1] <= (ht[i-2] if i > 1 else ht[0]):
++                is_up[i] = True
++            # crossunder? (just like ta.crossunder)
++            elif ht[i] < ht[i-1] and ht[i-1] >= (ht[i-2] if i > 1 else ht[0]):
++                is_up[i] = False
++            else:
++                # carry prior trend color through all other bars
++                is_up[i] = is_up[i-1]
++
++        # stick it back on the df so we can .where() easily
++        df['ht_up'] = is_up
++        up_mask   = df['ht_up']
++        down_mask = ~df['ht_up']
++
++        # plot the two coloured segments
++        fig.add_trace(go.Scatter(
++            x=df['timestamp'], y=df['half_trend'].where(up_mask),
++            mode='lines', line=dict(color='blue', width=2),
++            name='HalfTrend ↑'
++        ), row=1, col=1)
++
++        fig.add_trace(go.Scatter(
++            x=df['timestamp'], y=df['half_trend'].where(down_mask),
++            mode='lines', showlegend=False,
++            line=dict(color='red', width=2)
++        ), row=1, col=1)
++
++        # calculate flip‐points
++        buy  = up_mask & ~up_mask.shift(1, fill_value=False)
++        sell = down_mask & ~down_mask.shift(1, fill_value=False)
++
++        # up and down signal markers
++        fig.add_trace(go.Scatter(
++            x=df['timestamp'][buy], y=df['half_trend'][buy],
++            mode='markers', marker=dict(symbol='triangle-up', size=8, color='blue'),
++            name='Buy'
++        ), row=1, col=1)
++        fig.add_trace(go.Scatter(
++            x=df['timestamp'][sell], y=df['half_trend'][sell],
++            mode='markers', marker=dict(symbol='triangle-down', size=8, color='red'),
++            name='Sell'
++        ), row=1, col=1)
++
++        # connector lines (there was space between down and up half trends)
++        buy_idx  = df.index[buy]
++        sell_idx = df.index[sell]
++
++        up_x, up_y = [], []
++        for i in buy_idx:
++            if i > 0:
++                up_x += [df['timestamp'].iat[i-1], df['timestamp'].iat[i], None]
++                up_y += [ht[i-1], ht[i], None]
++
++        down_x, down_y = [], []
++        for i in sell_idx:
++            if i > 0:
++                down_x += [df['timestamp'].iat[i-1], df['timestamp'].iat[i], None]
++                down_y += [ht[i-1], ht[i], None]
++
++        fig.add_trace(go.Scatter(
++            x=up_x, y=up_y, mode='lines', showlegend=False,
++            line=dict(color='blue', width=2)
++        ), row=1, col=1)
++        fig.add_trace(go.Scatter(
++            x=down_x, y=down_y, mode='lines', showlegend=False,
++            line=dict(color='red', width=2)
++        ), row=1, col=1)
+\ No newline at end of file
+diff --git a/app/indicators/indicator.py b/app/indicators/indicator.py
+new file mode 100644
+index 0000000..ed7e4c6
+--- /dev/null
++++ b/app/indicators/indicator.py
+@@ -0,0 +1,24 @@
++import pandas as pd
++import plotly.graph_objects as go
++
++from abc import ABC, abstractmethod
++
++class Indicator(ABC):
++    """
++    Abstract base class for technical indicators.
++    """
++
++    def __init__(self, name: str):
++        self.name = name
++    
++    # TODO: instead of passing around DataFrame, there is probably a better approach later
++    # TODO: we should handle parameters dynamically so we don't have to manually call each separate indicator class
++    @abstractmethod
++    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
++        """Calculate indicator values and add columns to DataFrame."""
++        pass
++
++    @abstractmethod
++    def add_traces(self, fig: go.Figure, df: pd.DataFrame, row: int = 1):
++        """Add this indicator's traces to the figure."""
++        pass
+\ No newline at end of file
+diff --git a/app/indicators/kdj.py b/app/indicators/kdj.py
+new file mode 100644
+index 0000000..55381f7
+--- /dev/null
++++ b/app/indicators/kdj.py
+@@ -0,0 +1,74 @@
++import pandas as pd
++import ta
++import plotly.graph_objects as go
++
++from .indicator import Indicator
++
++class KDJIndicator(Indicator):
++    """KDJ indicator."""
++    
++    def __init__(self, window: int = 9, smoothing:  int= 3):
++        super().__init__("KDJ")
++        self.window = window
++        self.smoothing = smoothing
++    
++    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
++        """Calculate KDJ values."""
++        # compute RSV_t = 100 * (C - LLV(n)) / (HHV(n) - LLV(n))
++        low_n  = df['low'].rolling(window=self.window,  min_periods=1).min()
++        high_n = df['high'].rolling(window=self.window, min_periods=1).max()
++        rsv    = 100 * (df['close'] - low_n) / (high_n - low_n)
++
++        # 2) Wilder’s smoothing for %K and %D
++        k = pd.Series(index=df.index, dtype=float)
++        d = pd.Series(index=df.index, dtype=float)
++
++        # seed the first value
++        k.iloc[0] = rsv.iloc[0]
++        d.iloc[0] = k.iloc[0]
++
++        for i in range(1, len(df)):
++            k.iloc[i] = (rsv.iloc[i] + (self.smoothing - 1) * k.iloc[i-1]) / self.smoothing
++            d.iloc[i] = (k.iloc[i]   + (self.smoothing - 1) * d.iloc[i-1]) / self.smoothing
++
++        j = 3 * k - 2 * d
++
++        df['%K'] = k
++        df['%D'] = d
++        df['%J'] = j
++        return df
++    
++    def add_traces(self, fig: go.Figure, df: pd.DataFrame, row: int = 1):
++        """Add KDJ traces to figure."""
++        fig.add_trace(
++            go.Scatter(
++                x=df["timestamp"],
++                y=df["%K"],
++                mode="lines",
++                line=dict(color="rgba(255,0,0,1)", width=1),
++                opacity = 0.6,
++                name="K (20)"
++            ),
++            row=row, col=1
++        ) 
++        fig.add_trace(
++            go.Scatter(
++                x=df["timestamp"],
++                y=df["%D"],
++                mode="lines",
++                line=dict(color="rgba(51,153,255,0.8)", width=1),
++                name="D",
++            ),
++            row=row, col=1
++        )
++        fig.add_trace(
++            go.Scatter(
++                x=df["timestamp"],
++                y=df["%J"],
++                mode="lines",
++                line=dict(color="rgba(51,153,255,0.8)", width=1),
++                name="J",
++            ),
++            row=row, col=1
++        )
++        fig.update_yaxes(title_text='KDJ', row=row, col=1)
+\ No newline at end of file
+diff --git a/app/indicators/rsi.py b/app/indicators/rsi.py
+new file mode 100644
+index 0000000..69b3557
+--- /dev/null
++++ b/app/indicators/rsi.py
+@@ -0,0 +1,33 @@
++import pandas as pd
++import ta
++import plotly.graph_objects as go
++
++from .indicator import Indicator
++
++class RSIIndicator(Indicator):
++    """RSI (Relative Strength Index) indicator."""
++    
++    def __init__(self, window: int = 14):
++        super().__init__("RSI")
++        self.window = window
++    
++    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
++        """Calculate RSI values."""
++        df = df.copy()
++        df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=self.window).rsi()
++        return df
++    
++    def add_traces(self, fig: go.Figure, df: pd.DataFrame, row: int = 1):
++        """Add RSI trace to figure."""
++        fig.add_trace(
++            go.Scatter(
++                x=df['timestamp'],
++                y=df['rsi'],
++                mode='lines',
++                line=dict(width=1),
++                name='RSI (14)',
++                hovertemplate='RSI: %{y:.1f}<extra></extra>'
++            ),
++            row=row, col=1
++        )
++        fig.update_yaxes(title_text='RSI', row=row, col=1)
+\ No newline at end of file
+diff --git a/app/indicators/williams_r.py b/app/indicators/williams_r.py
+new file mode 100644
+index 0000000..29dc476
+--- /dev/null
++++ b/app/indicators/williams_r.py
+@@ -0,0 +1,38 @@
++import pandas as pd
++import ta
++import plotly.graph_objects as go
++
++from .indicator import Indicator
++
++class WilliamsRIndicator(Indicator):
++    """Williams %R indicator."""
++    
++    def __init__(self, lbp: int = 14):
++        super().__init__("William % Range")
++        self.lbp = lbp
++    
++    def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
++        """Calculate Williams %R values."""
++        df = df.copy()
++        df["WR"] = ta.momentum.williams_r(
++            df["high"], df["low"], df["close"], lbp=self.lbp
++        )
++        return df
++    
++
++    def add_traces(self, fig: go.Figure, df: pd.DataFrame, row: int = 1):
++        """Add Williams %R trace to figure."""
++        fig.add_trace(
++            go.Scatter(
++                x=df['timestamp'],
++                y=df['WR'],
++                mode='lines',
++                line=dict(width=1),
++                name='Williams %R (14)',
++                hovertemplate='Williams %R: %{y:.1f}<extra></extra>'
++            ),
++            row=row, col=1
++        )
++        fig.update_yaxes(title_text='Williams %R', row=row, col=1)
++
++        
+\ No newline at end of file
+diff --git a/app/sidebar/sidebar.py b/app/sidebar/sidebar.py
+new file mode 100644
+index 0000000..8cd7ca8
+--- /dev/null
++++ b/app/sidebar/sidebar.py
+@@ -0,0 +1,86 @@
++import streamlit as st
++
++from app.config import *
++
++class Sidebar:
++    """Handles sidebar controls and user input interaction"""
++
++    def __init__(self):
++        self.selected_cryptos = []
++        self.selected_indicator = []
++        self.selected_timeframe = '1h'
++        self.indicator_params = {}
++        self.render()
++    
++    def render(self):
++        """Render the sidebar components"""
++        self.render_headers()
++        self.render_crypto()
++        self.render_indicators()
++        self.render_timeframe()
++        self.render_refresh()
++        self.render_indicator_params()
++
++    def render_headers(self):
++        # Sidebar controls
++        st.sidebar.header("Settings")
++        # Cryptocurrency selection
++        st.sidebar.subheader("Select Cryptocurrencies")
++
++    def render_crypto(self):
++        self.selected_cryptos = st.sidebar.multiselect(
++            "Choose cryptocurrencies to monitor:",
++            options=list(AVAILABLE_CRYPTOS.keys()),
++            default=DEFAULT_CRYPTOS
++        )
++
++    def render_indicators(self):
++        #indicator selection
++        st.sidebar.subheader("Indicator")
++        self.selected_indicator = st.sidebar.multiselect(
++            "Select Indicator:",
++            options=AVAILABLE_INDICATORS
++        )
++
++    def render_timeframe(self):
++        st.sidebar.subheader("Timeframe")
++        self.selected_timeframe = st.sidebar.selectbox(
++        "Select timeframe:",
++        options=list(TIMEFRAMES.keys()),
++        index=3  # Default to 1h
++    )
++        
++    def render_refresh(self):
++        # Refresh button
++        if st.sidebar.button("🔄 Refresh Now"):
++            st.cache_data.clear()
++            st.rerun()
++        st.sidebar.markdown("---")
++
++    def render_indicator_params(self):
++        if "RSI" in self.selected_indicator:
++            self.indicator_params["RSI"] = {
++                "window": st.sidebar.number_input("RSI window", 2, 100, 14, key="RSI_w")
++            }
++
++        if "Bollinger Band" in self.selected_indicator:
++            self.indicator_params["Bollinger Band"] = {
++                "window":     st.sidebar.number_input("BB window", 2, 100, 20, key="BB_w"),
++                "window_dev": st.sidebar.slider("BB σ-dev", 1.0, 4.0, 2.0, 0.1, key="BB_d")
++            }
++
++        if "KDJ" in self.selected_indicator:
++            self.indicator_params["KDJ"] = {
++                "window": st.sidebar.number_input("KDJ window", 2, 100, 9, key="KDJ_p"),
++                "smoothing": st.sidebar.number_input("KDJ smoothing period", 1, 10, 3, key="KDJ_s"),
++            }
++
++        if "William % Range" in self.selected_indicator:
++            self.indicator_params["William % Range"] = {
++                "lbp": st.sidebar.number_input("William %R window", 2, 100, 14, key="WR_w")
++            }
++
++        if "Half Trend" in self.selected_indicator:
++            self.indicator_params["Half Trend"] = {
++                "amplitude":     st.sidebar.number_input("HT Amplitude", 2, 50, 5, key="HT_p"),
++            }
+\ No newline at end of file
+diff --git a/app/state_manager.py b/app/state_manager.py
+new file mode 100644
+index 0000000..cd4a60e
+--- /dev/null
++++ b/app/state_manager.py
+@@ -0,0 +1,79 @@
++import streamlit as st
++
++from app.config import *
++
++class SessionStateManager:
++    """Manages Streamlit st.session_state variables with getters
++    and setters
++    """
++    DEFAULTS = {
++        "bt_mode": False,
++        "df": None,
++        "crypto": None,
++        "hit_index": 0,
++        "chart_end": None,
++        "ob": None
++    }
++    def __init__(self):
++        self._initialize_defaults()
++
++    def _initialize_defaults(self):
++        for key, default in self.DEFAULTS.items():
++            if key not in st.session_state:
++                st.session_state[key] = default
++
++    def get(self, key):
++        """Generic getter for any session_state key."""
++        return st.session_state.get(key)
++
++    def set(self, key, value):
++        """Generic setter for any session_state key."""
++        st.session_state[key] = value
++
++    @property
++    def bt_mode(self) -> bool:
++        return st.session_state["bt_mode"]
++
++    @bt_mode.setter
++    def bt_mode(self, value: bool):
++        st.session_state["bt_mode"] = value
++
++    @property
++    def ob(self):
++        return st.session_state["ob"]
++    
++    @ob.setter
++    def ob(self, value):
++        st.session_state["ob"] = value
++
++    @property
++    def df(self):
++        return st.session_state["df"]
++
++    @df.setter
++    def df(self, value):
++        st.session_state["df"] = value
++
++    @property
++    def crypto(self) -> str:
++        return st.session_state["crypto"]
++
++    @crypto.setter
++    def crypto(self, value: str):
++        st.session_state["crypto"] = value
++
++    @property
++    def hit_index(self) -> int:
++        return st.session_state["hit_index"]
++
++    @hit_index.setter
++    def hit_index(self, value: int):
++        st.session_state["hit_index"] = value
++
++    @property
++    def chart_end(self):
++        return st.session_state["chart_end"]
++
++    @chart_end.setter
++    def chart_end(self, value):
++        st.session_state["chart_end"] = value
+\ No newline at end of file
+diff --git a/crypto_monitor.py b/crypto_monitor.py
+deleted file mode 100644
+index 0d66338..0000000
+--- a/crypto_monitor.py
++++ /dev/null
+@@ -1,491 +0,0 @@
+-import streamlit as st
+-import plotly.graph_objects as go
+-from plotly.subplots import make_subplots
+-import plotly.express as px
+-import pandas as pd
+-import ta
+-import requests
+-import time
+-from datetime import datetime, timedelta
+-import ccxt
+-from config import *
+-
+-# Page configuration
+-st.set_page_config(
+-    page_title="Crypto Price Monitor",
+-    page_icon="₿",
+-    layout="wide",
+-    initial_sidebar_state="expanded"
+-)
+-
+-class CryptoPriceMonitor:
+-    def __init__(self):
+-        self.exchange = ccxt.binance({
+-            'sandbox': False,
+-            'rateLimit': RATE_LIMIT,
+-            'enableRateLimit': ENABLE_RATE_LIMIT,
+-        })
+-        
+-        # Available cryptocurrencies (from config)
+-        self.available_cryptos = AVAILABLE_CRYPTOS
+-        
+-        # Timeframe mapping (from config)
+-        self.timeframes = TIMEFRAMES
+-    
+-        self.separate_ax_indicators = SEPARATE_AX_INDICATORS
+-
+-    @st.cache_data(ttl=CACHE_TTL_OHLC, show_spinner=False)  # Hide spinner
+-    def fetch_ohlc_data(_self, symbol, timeframe, limit=100):
+-        """Fetch OHLC data from exchange"""
+-        try:
+-            ohlcv = _self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+-            if not ohlcv:  # Check if data is empty
+-                return None
+-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+-            # Remove volume column as it's not needed
+-            df = df.drop('volume', axis=1)
+-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+-            return df
+-        except Exception as e:
+-            # Silently return None to prevent UI disruption
+-            return None
+-    
+-    @st.cache_data(ttl=CACHE_TTL_PRICE, show_spinner=False)  # Hide spinner
+-    def get_current_price(_self, symbol):
+-        """Get current price for a symbol"""
+-        try:
+-            ticker = _self.exchange.fetch_ticker(symbol)
+-            if not ticker or 'last' not in ticker:  # Check if ticker data is valid
+-                return None, None
+-            return ticker['last'], ticker.get('percentage', 0)
+-        except Exception as e:
+-            # Silently return None to prevent UI disruption
+-            return None, None
+-
+-    # returns changed dataframe with new data 'half_trend' that will be used to creating half trend indicator
+-    def calculate_half_trend(self, df, period=10, multiplier=1):
+-        # Half Trend calculation based on ATR
+-        hl2 = (df['high'] + df['low']) / 2
+-        atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range()
+-        # Initialize with first True Range
+-        ht = [hl2.iloc[0]]
+-        trend = True  # True=uptrend, False=downtrend
+-        for i in range(1, len(df)):
+-            delta = atr.iloc[i] * multiplier
+-            prev_ht = ht[-1]
+-            if hl2.iloc[i] > prev_ht + delta:
+-                ht.append(prev_ht + delta)
+-                trend = True
+-            elif hl2.iloc[i] < prev_ht - delta:
+-                ht.append(prev_ht - delta)
+-                trend = False
+-            else:
+-                ht.append(prev_ht)
+-        df['half_trend'] = ht
+-
+-        return df
+-
+-    def create_ohlc_chart(self, df, symbol, timeframe, indicators, params):
+-        """Create OHLC candlestick chart"""
+-        if df is None or df.empty:
+-            return None
+-        
+-        # Compute Half Trend if selected
+-        if 'Half Trend' in indicators:
+-            df = self.calculate_half_trend(df, period=params['Half Trend']['period'],
+-                                           multiplier=params['Half Trend']['multiplier'])
+-
+-
+-        sep_inds = []
+-        for ind in indicators:
+-            if ind in self.separate_ax_indicators:
+-                sep_inds.append(ind)
+-
+-        # Changes height of chart as more indicators are added.
+-        n_rows = 1 + len(sep_inds)
+-        weights      = [3] + [1] * len(sep_inds)
+-        total_weight = sum(weights)
+-        row_heights  = [w/total_weight for w in weights]
+-
+-        fig = make_subplots(
+-            rows=n_rows, cols=1,
+-            shared_xaxes = True,
+-            vertical_spacing=0.02,
+-            row_heights = row_heights,
+-            subplot_titles=(f'{symbol} Price Chart ({timeframe})',)
+-        )
+-        # Candlestick chart
+-        fig.add_trace(
+-            go.Candlestick(
+-                x=df['timestamp'],
+-                open=df['open'],
+-                high=df['high'],
+-                low=df['low'],
+-                close=df['close'],
+-                name='Price',
+-                increasing_line_color=BULLISH_COLOR,
+-                decreasing_line_color=BEARISH_COLOR,
+-                increasing_fillcolor=BULLISH_COLOR,
+-                decreasing_fillcolor=BEARISH_COLOR
+-            ),
+-            row=1, col=1
+-        )
+-        fig.update_yaxes(title_text='Price (USDT)', row=1, col=1)
+-
+-        # Plot Half Trend
+-        if 'Half Trend' in indicators:
+-            fig.add_trace(
+-                go.Scatter(
+-                    x=df['timestamp'], 
+-                    y=df['half_trend'],
+-                    mode='lines', 
+-                    name='Half Trend',
+-                    line=dict(width=1)
+-                ), row=1, col=1
+-            )
+-
+-        # Bollinger Band
+-        if "Bollinger Band" in indicators:
+-            w = params['Bollinger Band']['window']
+-            dev = params['Bollinger Band']['window_dev']
+-            bb = ta.volatility.BollingerBands(close=df["close"], window=w, window_dev=dev)
+-
+-            df["bb_middle"] = bb.bollinger_mavg()
+-            df["bb_upper"]  = bb.bollinger_hband()
+-            df["bb_lower"]  = bb.bollinger_lband()
+-
+-            fig.add_trace(
+-                go.Scatter(
+-                    x=df["timestamp"],
+-                    y=df["bb_middle"],
+-                    mode="lines",
+-                    line=dict(color="rgba(255,0,0,1)", width=1),
+-                    opacity = 0.6,
+-                    name="BB Middle (20)"
+-                ),
+-                row=1, col=1
+-            )
+-            fig.add_trace(
+-                go.Scatter(
+-                    x=df["timestamp"],
+-                    y=df["bb_upper"],
+-                    mode="lines",
+-                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+-                    name="BB Upper (20,+2σ)",
+-                    hovertemplate="Upper: %{y:.2f}<extra></extra>"
+-                ),
+-                row=1, col=1
+-            )
+-            fig.add_trace(
+-                go.Scatter(
+-                    x=df["timestamp"],
+-                    y=df["bb_lower"],
+-                    mode="lines",
+-                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+-                    name="BB Lower (20,−2σ)",
+-                    hovertemplate="Lower: %{y:.2f}<extra></extra>"
+-                ),
+-                row=1, col=1
+-            )
+-        
+-        for idx, ind in enumerate(sep_inds, start=2):
+-
+-            # RSI Chart
+-            if ind == "RSI":
+-                w = params['RSI']['window']
+-                df["rsi"] = (ta.momentum.RSIIndicator(df["close"], window=w).rsi())
+-
+-                fig.add_trace(
+-                    go.Scatter(
+-                        x=df['timestamp'],
+-                        y=df['rsi'],
+-                        mode='lines',
+-                        line=dict(width=1),
+-                        name='RSI (14)',
+-                        hovertemplate='RSI: %{y:.1f}<extra></extra>'
+-                    ),
+-                    row=idx, col=1
+-                )
+-                fig.update_yaxes(title_text='RSI', row=idx, col=1)
+-
+-            # William % Range chart
+-            if ind == "William % Range":
+-                lbp = params['William % Range']['lbp']
+-                df["WR"] = (ta.momentum.williams_r(df["high"], df["low"], df["close"], lbp=lbp))
+-
+-                fig.add_trace(
+-                    go.Scatter(
+-                        x=df['timestamp'],
+-                        y=df['WR'],
+-                        mode='lines',
+-                        line=dict(width=1),
+-                        name='William % Range (14)',
+-                        hovertemplate='%{y:.1f}<extra></extra>'
+-                    ),
+-                    row=idx, col=1
+-                )
+-                fig.update_yaxes(title_text='Williams % Range', row=idx, col=1)
+-                
+-            # KDJ chart
+-            if ind == "KDJ":
+-                period = params['KDJ']['period']
+-                signal = params['KDJ']['signal']
+-                stoch = ta.momentum.StochasticOscillator(df["high"], df["low"], df["close"], window=period, smooth_window=signal)
+-                df['%K'] = stoch.stoch()
+-                df['%D'] = stoch.stoch_signal()
+-                df['%J'] = 3 * df['%K'] - 2 * df['%D']
+-
+-                fig.add_trace(
+-                go.Scatter(
+-                    x=df["timestamp"],
+-                    y=df["%K"],
+-                    mode="lines",
+-                    line=dict(color="rgba(255,0,0,1)", width=1),
+-                    opacity = 0.6,
+-                    name="K (20)"
+-                ),
+-                row=idx, col=1
+-                ) 
+-                fig.add_trace(
+-                go.Scatter(
+-                    x=df["timestamp"],
+-                    y=df["%D"],
+-                    mode="lines",
+-                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+-                    name="D",
+-                ),
+-                row=idx, col=1
+-                )
+-                fig.add_trace(
+-                go.Scatter(
+-                    x=df["timestamp"],
+-                    y=df["%J"],
+-                    mode="lines",
+-                    line=dict(color="rgba(51,153,255,0.8)", width=1),
+-                    name="J",
+-                ),
+-                row=idx, col=1
+-                )
+-                fig.update_yaxes(title_text='KDJ', row=idx, col=1)
+-        
+-        # Update layout
+-        fig.update_layout(
+-            title=f'{symbol} - {timeframe} Chart',
+-            xaxis_rangeslider_visible=False,
+-            height=CHART_HEIGHT,
+-            showlegend=False,
+-            plot_bgcolor='#0e1117',
+-            paper_bgcolor='#0e1117',
+-            font=dict(color='white'),
+-            dragmode='pan'  # Set pan as default drag mode in layout
+-        )
+-        
+-        # Update axes
+-        fig.update_xaxes(gridcolor='#2d3748', showgrid=True)
+-        fig.update_yaxes(gridcolor='#2d3748', showgrid=True)
+-        
+-        return fig
+-    
+-    def display_price_summary(self, selected_cryptos, timeframe):
+-        """Display price summary cards"""
+-        cols = st.columns(len(selected_cryptos))
+-        
+-        for idx, crypto in enumerate(selected_cryptos):
+-            symbol = self.available_cryptos[crypto]
+-            current_price, price_change = self.get_current_price(symbol)
+-            
+-            with cols[idx]:
+-                if current_price is not None:
+-                    change_color = "🟢" if price_change >= 0 else "🔴"
+-                    st.metric(
+-                        label=f"{crypto}/USDT",
+-                        value=f"${current_price:,.4f}",
+-                        delta=f"{price_change:+.2f}%"
+-                    )
+-                else:
+-                    st.error(f"Unable to fetch {crypto} data")
+-
+-def main():
+-    st.title("🚀 Crypto Price Monitor")
+-    st.markdown("---")
+-    
+-    # Initialize the monitor
+-    monitor = CryptoPriceMonitor()
+-    
+-    # Sidebar controls
+-    st.sidebar.header("Settings")
+-    
+-    # Cryptocurrency selection
+-    st.sidebar.subheader("Select Cryptocurrencies")
+-    default_cryptos = DEFAULT_CRYPTOS
+-    selected_cryptos = st.sidebar.multiselect(
+-        "Choose cryptocurrencies to monitor:",
+-        options=list(monitor.available_cryptos.keys()),
+-        default=default_cryptos
+-    )
+-    #indicator selection
+-    st.sidebar.subheader("Indicator")
+-    selected_indicator = st.sidebar.multiselect(
+-        "Select Indicator:",
+-        options=["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
+-    )
+-    # Timeframe selection
+-    st.sidebar.subheader("Timeframe")
+-    selected_timeframe = st.sidebar.selectbox(
+-        "Select timeframe:",
+-        options=list(monitor.timeframes.keys()),
+-        index=4  # Default to 1h
+-    )
+-    
+-    # Refresh button
+-    if st.sidebar.button("🔄 Refresh Now"):
+-        st.cache_data.clear()
+-        st.rerun()
+-
+-    st.sidebar.markdown("---")
+-
+-    # Indicator Parameters that appear when indicator is selected
+-    indicator_params = {}
+-
+-    if "RSI" in selected_indicator:
+-        indicator_params["RSI"] = {
+-            "window": st.sidebar.number_input("RSI window", 2, 100, 14, key="RSI_w")
+-        }
+-
+-    if "Bollinger Band" in selected_indicator:
+-        indicator_params["Bollinger Band"] = {
+-            "window":     st.sidebar.number_input("BB window", 2, 100, 20, key="BB_w"),
+-            "window_dev": st.sidebar.slider("BB σ-dev", 1.0, 4.0, 2.0, 0.1, key="BB_d")
+-        }
+-
+-    if "KDJ" in selected_indicator:
+-        indicator_params["KDJ"] = {
+-            "period": st.sidebar.number_input("KDJ period", 2, 100, 14, key="KDJ_p"),
+-            "signal": st.sidebar.number_input("KDJ signal", 1, 10, 3, key="KDJ_s"),
+-        }
+-
+-    if "William % Range" in selected_indicator:
+-        indicator_params["William % Range"] = {
+-            "lbp": st.sidebar.number_input("William %R window", 2, 100, 14, key="WR_w")
+-        }
+-
+-    if "Half Trend RMA" in selected_indicator:
+-        indicator_params["Half Trend"] = {
+-            "period":     st.sidebar.number_input("HT ATR period", 2, 50, 10, key="HT_p"),
+-            "multiplier": st.sidebar.slider("HT multiplier", 0.1, 3.0, 1.0, 0.1, key="HT_m")
+-        }
+-
+-    if not selected_cryptos:
+-        st.warning("Please select at least one cryptocurrency to monitor.")
+-        return
+-    
+-    # Display price summary
+-    st.subheader("📊 Price Summary")
+-    monitor.display_price_summary(selected_cryptos, monitor.timeframes[selected_timeframe])
+-    
+-    st.markdown("---")
+-    
+-    # Display charts
+-    st.subheader("📈 OHLC Charts")
+-    
+-    # Create tabs for each cryptocurrency
+-    if len(selected_cryptos) > 1:
+-        tabs = st.tabs(selected_cryptos)
+-        for idx, crypto in enumerate(selected_cryptos):
+-            with tabs[idx]:
+-                symbol = monitor.available_cryptos[crypto]
+-                df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[selected_timeframe])
+-                
+-                if df is not None:
+-                    fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator, indicator_params)
+-                    if fig:
+-                        st.plotly_chart(
+-                            fig, 
+-                            use_container_width=True,
+-                            config={
+-                                'displayModeBar': True,
+-                                'scrollZoom': True,  # Enable mouse scroll zoom
+-                                'doubleClick': 'reset',  # Double-click to reset zoom
+-                                'showTips': False,
+-                                'displaylogo': False,
+-                                'dragmode': 'pan',  # Set pan as default mode
+-                                'modeBarButtonsToRemove': [
+-                                    'downloadPlot',
+-                                    'toImage',
+-                                    'lasso2d',
+-                                    'select2d',
+-                                    'zoom2d',         # Remove zoom tool
+-                                    'zoomIn2d',       # Remove zoom in button
+-                                    'zoomOut2d',      # Remove zoom out button
+-                                    'autoScale2d'     # Remove auto scale button
+-                                ]
+-                            }
+-                        )
+-                        
+-                        # Display data table
+-                        with st.expander(f"📋 {crypto} Data Table"):
+-                            st.dataframe(df.tail(10).iloc[::-1], use_container_width=True)
+-                else:
+-                    st.error(f"Unable to load chart for {crypto}")
+-    else:
+-        # Single cryptocurrency view
+-        crypto = selected_cryptos[0]
+-        symbol = monitor.available_cryptos[crypto]
+-        df = monitor.fetch_ohlc_data(symbol, monitor.timeframes[selected_timeframe])
+-        
+-        # if able to load coin price data.
+-        if df is not None:
+-            fig = monitor.create_ohlc_chart(df, crypto, selected_timeframe, selected_indicator)
+-            if fig:
+-                st.plotly_chart(
+-                    fig, 
+-                    use_container_width=True,
+-                    config={
+-                        'displayModeBar': True,
+-                        'modeBarButtonsToAdd': [
+-                            ['drawrect']
+-                        ],
+-                        'scrollZoom': True,  # Enable mouse scroll zoom
+-                        'doubleClick': 'reset',  # Double-click to reset zoom
+-                        'showTips': False,
+-                        'displaylogo': False,
+-                        'dragmode': 'pan',  # Set pan as default mode
+-                        'modeBarButtonsToRemove': [
+-                            'downloadPlot',
+-                            'toImage',
+-                            'lasso2d',
+-                            'select2d',
+-                            'zoom2d',         # Remove zoom tool
+-                            'zoomIn2d',       # Remove zoom in button
+-                            'zoomOut2d',      # Remove zoom out button
+-                            'autoScale2d'     # Remove auto scale button
+-                        ]
+-                        
+-                    }
+-                )
+-                
+-                # Display data table
+-                with st.expander(f"📋 {crypto} Data Table"):
+-                    st.dataframe(df.tail(10).iloc[::-1], use_container_width=True)
+-        else:
+-            st.error(f"Unable to load chart for {crypto}")
+-    
+-    # Footer
+-    st.markdown("---")
+-    
+-    st.markdown(
+-        """
+-        <div style='text-align: center; color: #666; font-size: 12px;'>
+-        💡 Data provided by Binance API • Auto-refresh every 10 seconds • Built with Streamlit & Plotly
+-        </div>
+-        """, 
+-        unsafe_allow_html=True
+-    )
+-    
+-    
+-    # Auto-refresh functionality (always enabled)
+-    time.sleep(AUTO_REFRESH_INTERVAL)
+-    st.rerun()
+-
+-if __name__ == "__main__":
+-    main()
+diff --git a/main.py b/main.py
+new file mode 100644
+index 0000000..32726dc
+--- /dev/null
++++ b/main.py
+@@ -0,0 +1,6 @@
++import streamlit as st
++from app.crypto_monitor import CryptoMonitor
++
++if __name__ == "__main__":
++    app = CryptoMonitor()
++    app.run()
+\ No newline at end of file
+diff --git a/run_app.bat b/run_app.bat
+index 650eda8..c2ab074 100644
+--- a/run_app.bat
++++ b/run_app.bat
+@@ -4,4 +4,4 @@ echo.
+ echo Opening browser at http://localhost:8501
+ echo Press Ctrl+C to stop the application
+ echo.
+-"C:/Users/Hi/Desktop/Crypto/.venv/Scripts/python.exe" -m streamlit run crypto_monitor.py
++"C:/Users/Hi/Desktop/Crypto/.venv/Scripts/python.exe" -m streamlit run main.py
+diff --git a/setup.bat b/setup.bat
+index 83bfadd..37126ba 100644
+--- a/setup.bat
++++ b/setup.bat
+@@ -31,7 +31,7 @@ echo ========================================
+ echo.
+ echo To run the app:
+ echo   1. Double-click 'run_app.bat'
+-echo   2. Or run: streamlit run crypto_monitor.py
++echo   2. Or run: streamlit run main.py
+ echo.
+ echo The app will open at: http://localhost:8501
+ echo.
+diff --git a/test_app.py b/test_app.py
+index aacad3a..c371420 100644
+--- a/test_app.py
++++ b/test_app.py
+@@ -14,7 +14,7 @@ try:
+     import plotly.graph_objects as go
+     import pandas as pd
+     import ccxt
+-    from config import *
++    from app.config import *
+     print("✅ All imports successful!")
+     
+     # Test exchange connection
