@@ -13,7 +13,6 @@ class RSIIndicator(Indicator):
     
     def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate RSI values."""
-        df = df.copy()
         df["rsi"] = ta.momentum.RSIIndicator(df["close"], window=self.window).rsi()
         return df
     

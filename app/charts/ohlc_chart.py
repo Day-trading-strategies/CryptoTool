@@ -71,9 +71,10 @@ class OHLCChartCreator:
             # if user chooses a hit point to test, create chart from start to hit point
             if self.states.chart_end:
                 temp_df = self.df[crypto].copy()
-                # self.df[crypto] = self.df[crypto][self.df[crypto]["timestamp"] <= self.states.chart_end]
+                end_idx = self.states.chart_navigation[crypto]
+                self.df[crypto] = self.df[crypto].iloc[: end_idx + 1]
                 fig = self.create_chart(crypto, highlighted_timestamps, current_position)
-                self.df[crypto] = temp_df.copy()
+                self.df[crypto] = temp_df
             # else create chart with original data.
 
             if fig:
@@ -111,10 +112,23 @@ class OHLCChartCreator:
 
                 # render a “Next →” button
                 if timestamps and st.button("Next →", key="next_hit"):
-                    next_idx = (self.states.hit_index + 1) % len(timestamps)
+                    current_idx = self.states.hit_index
+                    next_idx = (current_idx + 1) % len(timestamps)
                     self.states.hit_index = next_idx
-                    self.states.chart_end = timestamps[next_idx]
+
+                    # move chart_end to that next timestamp
+                    next_ts = timestamps[next_idx]
+                    self.states.chart_end = next_ts
+
+                    # find & store its row index
+                    chart_end_index = int(
+                        self.df[crypto][self.df[crypto]['timestamp'] == next_ts]
+                            .index[0]
+                    )
+                    self.states.chart_navigation[crypto] = chart_end_index
+
                     st.rerun()
+
                         
                 try:
                     filtered = pd.read_csv("filtered_backtest.csv")
@@ -291,12 +305,15 @@ class OHLCChartCreator:
                 end_time = df.iloc[chart_position]['timestamp']
                 start_time = self._calculate_window_start(end_time, timeframe, df)
                 
-                fig.update_layout(
-                    xaxis=dict(
-                        range=[start_time, end_time],
-                        type='date'
-                    )
-                )
+                # fig.update_layout(
+                    # xaxis=dict(
+                    #     range=[start_time, end_time],
+                    #     type='date'
+                    # )
+                    # )
+                fig.update_xaxes(range=[start_time, end_time])
+                
+
         elif highlighted_timestamps:
             # Use highlight positioning
             latest_highlight = max(highlighted_timestamps)

@@ -13,7 +13,6 @@ class WilliamsRIndicator(Indicator):
     
     def calculate(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate Williams %R values."""
-        df = df.copy()
         df["WR"] = ta.momentum.williams_r(
             df["high"], df["low"], df["close"], lbp=self.lbp
         )
