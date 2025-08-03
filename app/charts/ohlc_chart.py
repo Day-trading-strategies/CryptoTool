@@ -133,6 +133,14 @@ class OHLCChartCreator:
                     )
                     self.states.chart_navigation[crypto] = chart_end_index
 
+                    # Keep highlighted list in sync with navigation
+                    if crypto not in self.states.highlighted_candles:
+                        self.states.highlighted_candles[crypto] = []
+                    
+                    # Add the new timestamp to highlights if not already present
+                    if next_ts not in self.states.highlighted_candles[crypto]:
+                        self.states.highlighted_candles[crypto].append(next_ts)
+
                     st.rerun()
 
                         
@@ -331,11 +339,9 @@ class OHLCChartCreator:
                     highlight_time = df.iloc[highlight_index]['timestamp']
                     start_time = self._calculate_window_start(highlight_time, timeframe, df)
                     
-                    fig.update_layout(
-                        xaxis=dict(
-                            range=[start_time, highlight_time],
-                            type='date'
-                        )
+                    fig.update_xaxes(
+                        range=[start_time, highlight_time],
+                        type='date'
                     )
                     
                     # IMPORTANT: Update navigation position to match the highlighted position
@@ -379,11 +385,9 @@ class OHLCChartCreator:
                     highlight_time = df.iloc[highlight_index]['timestamp']
                     start_time = self._calculate_window_start(highlight_time, timeframe, df)
                     
-                    fig.update_layout(
-                        xaxis=dict(
-                            range=[start_time, highlight_time],
-                            type='date'
-                        )
+                    fig.update_xaxes(
+                        range=[start_time, highlight_time],
+                        type='date'
                     )
                     return  # Exit early - highlights take priority when navigation matches
                 
