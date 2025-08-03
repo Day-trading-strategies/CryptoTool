@@ -65,6 +65,7 @@ class OHLCChartCreator:
             current_position = navigator.render()
             highlighted_timestamps = highlighter.render()
 
+            fig = self.create_chart(crypto, highlighted_timestamps, current_position)
             self.df[crypto].to_csv("backtest_data.csv", index=False)
 
             # if user chooses a hit point to test, create chart from start to hit point
@@ -72,7 +73,11 @@ class OHLCChartCreator:
                 temp_df = self.df[crypto].copy()
                 end_idx = self.states.chart_navigation[crypto]
                 self.df[crypto] = self.df[crypto].iloc[: end_idx + 1]
-                fig = self.create_chart(crypto, highlighted_timestamps, current_position)
+                
+                # Adjust current_position for truncated data
+                adjusted_position = current_position if current_position is not None and current_position <= end_idx else None
+                
+                fig = self.create_chart(crypto, highlighted_timestamps, adjusted_position)
                 self.df[crypto] = temp_df
             else:
                 # create chart with original data (entire dataset)
@@ -101,32 +106,7 @@ class OHLCChartCreator:
                         ]
                     }
                 )
-                
-                # Calculate indicators needed for backtesting before finding hits
-                temp_df = self.df[crypto].copy()
-                for ind in self.selected_indicators:
-                    if ind == "RSI":
-                        from app.indicators.rsi import RSIIndicator
-                        indicator = RSIIndicator(**self.indicator_params.get("RSI", {}))
-                        temp_df = indicator.calculate(temp_df)
-                    elif ind == "Bollinger Band":
-                        from app.indicators.bollinger_bands import BollingerBandsIndicator
-                        indicator = BollingerBandsIndicator(**self.indicator_params.get("Bollinger Band", {}))
-                        temp_df = indicator.calculate(temp_df)
-                    elif ind == "KDJ":
-                        from app.indicators.kdj import KDJIndicator
-                        indicator = KDJIndicator(**self.indicator_params.get("KDJ", {}))
-                        temp_df = indicator.calculate(temp_df)
-                    elif ind == "Half Trend":
-                        from app.indicators.half_trend import HalfTrendIndicator
-                        indicator = HalfTrendIndicator(**self.indicator_params.get("Half Trend", {}))
-                        temp_df = indicator.calculate(temp_df)
-                    elif ind == "William % Range":
-                        from app.indicators.williams_r import WilliamsRIndicator
-                        indicator = WilliamsRIndicator(**self.indicator_params.get("William % Range", {}))
-                        temp_df = indicator.calculate(temp_df)
-                
-                hits = self.states.ob.find_hits(temp_df)
+                hits = self.states.ob.find_hits(self.df[crypto])
                 hits["timestamp"].to_csv("filtered_backtest.csv", index=False) 
 
                 timestamps = hits["timestamp"].tolist()
