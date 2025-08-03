@@ -62,8 +62,17 @@ class ChartNavigation:
         if previous_timeframe != current_timeframe:
             # Reset navigation to latest when timeframe changes
             nav_positions = self.states.chart_navigation
-            nav_positions[self.crypto] = len(self.df) - 1
+            nav_positions[self.crypto] = int(len(self.df) - 1)
             self.states.chart_navigation = nav_positions
+            
+            # DON'T clear highlights here - let them persist across timeframe changes
+            # The auto-panning logic will handle positioning around existing highlights
+            
+            # Only clear previous highlights state for auto-panning detection
+            prev_highlights_key = f"prev_highlighted_candles_{self.crypto}"
+            if prev_highlights_key in st.session_state:
+                del st.session_state[prev_highlights_key]
+            
             st.session_state[self.timeframe_key] = current_timeframe
     
     def _get_current_position(self):
@@ -72,13 +81,13 @@ class ChartNavigation:
         if self.crypto not in nav_positions or (nav_positions[self.crypto] < 0 or nav_positions[self.crypto] >= len(self.df)):
             nav_positions[self.crypto] = len(self.df) - 1
             self.states.chart_navigation = nav_positions
-        return nav_positions[self.crypto]
+        return int(nav_positions[self.crypto])  # Ensure it's a Python int
     
     def _navigate_back(self):
         """Navigate to previous candlestick"""
         nav_positions = self.states.chart_navigation
         if nav_positions[self.crypto] > 0:
-            nav_positions[self.crypto] -= 1
+            nav_positions[self.crypto] = int(nav_positions[self.crypto] - 1)
             self.states.chart_navigation = nav_positions
             st.rerun()
     
@@ -86,13 +95,13 @@ class ChartNavigation:
         """Navigate to next candlestick"""
         nav_positions = self.states.chart_navigation
         if nav_positions[self.crypto] < len(self.df) - 1:
-            nav_positions[self.crypto] += 1
+            nav_positions[self.crypto] = int(nav_positions[self.crypto] + 1)
             self.states.chart_navigation = nav_positions
             st.rerun()
     
     def navigate_to_latest(self):
         """Navigate to latest candlestick"""
         nav_positions = self.states.chart_navigation
-        nav_positions[self.crypto] = len(self.df) - 1
+        nav_positions[self.crypto] = int(len(self.df) - 1)
         self.states.chart_navigation = nav_positions
         st.rerun()
