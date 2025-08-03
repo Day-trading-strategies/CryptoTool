@@ -50,7 +50,7 @@ class ChartNavigation:
                         key=f"nav_latest{key_suffix}", 
                         disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
-                self._navigate_to_latest()
+                self.navigate_to_latest()
         
         return current_position
     
@@ -90,7 +90,7 @@ class ChartNavigation:
             self.states.chart_navigation = nav_positions
             st.rerun()
     
-    def _navigate_to_latest(self):
+    def navigate_to_latest(self):
         """Navigate to latest candlestick"""
         nav_positions = self.states.chart_navigation
         nav_positions[self.crypto] = len(self.df) - 1
