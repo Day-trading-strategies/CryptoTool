@@ -10,6 +10,7 @@ class SessionStateManager:
         "bt_mode": False,
         "df": None,
         "crypto": None,
+        "timeframe": None,
         "hit_index": 0,
         "chart_end": None,
         "ob": None,
@@ -42,6 +43,14 @@ class SessionStateManager:
     def bt_mode(self, value: bool):
         st.session_state["bt_mode"] = value
 
+    @property
+    def timeframe(self) -> bool:
+        return st.session_state["timeframe"]
+        
+    @timeframe.setter
+    def timeframe(self, value: bool):
+        st.session_state["timeframe"] = value
+    
     @property
     def ob(self):
         return st.session_state["ob"]
