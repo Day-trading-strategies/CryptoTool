@@ -11,6 +11,7 @@ from app.indicators.bollinger_bands import BollingerBandsIndicator
 from app.indicators.rsi import RSIIndicator
 from app.indicators.williams_r import WilliamsRIndicator
 from app.indicators.kdj import KDJIndicator
+from app.indicators.stochastic import StochasticIndicator
 from app.charts.chart_navigation import ChartNavigation
 from app.charts.candlestick_highlighter import CandlestickHighlighter
 
@@ -125,7 +126,7 @@ class OHLCChartCreator:
                     }
                 )
 
-                hits = pd.read_csv("data/filtered_backtest.csv")
+                hits = pd.read_csv("data/filtered_backtest.csv", parse_dates=["timestamp"])
                 timestamps = hits["timestamp"].tolist()
                 
                 if self.states.chart_end in timestamps:
@@ -135,31 +136,35 @@ class OHLCChartCreator:
 
                 # render a “Next →” button
                 if timestamps and st.button("Next →", key="next_hit"):
-                    current_idx = self.states.hit_index
-                    next_idx = (current_idx + 1) % len(timestamps)
-                    self.states.hit_index = next_idx
+                    # 1) advance the pointer
+                    self.states.hit_index = (self.states.hit_index + 1) % len(timestamps)
 
-                    # move chart_end to that next timestamp
-                    next_ts = timestamps[next_idx]
-                    self.states.chart_end = next_ts
+                    # 2) use the next ts (convert to Timestamp for consistency)
+                    next_ts = pd.to_datetime(timestamps[self.states.hit_index])
+                    self.states.chart_end = next_ts          # store as datetime
 
-                    # find & store its row index
-                    chart_end_index = int(
-                        self.df[crypto][self.df[crypto]['timestamp'] == next_ts]
-                            .index[0]
-                    )
-                    self.states.chart_navigation[crypto] = chart_end_index
+                    # 3) find the nearest candle ≤ next_ts
+                    ts_series  = self.df[crypto]["timestamp"]
+                    valid_ts   = ts_series[ts_series <= next_ts]
+                    if not valid_ts.empty:
+                        nearest_ts      = valid_ts.max()
+                        chart_end_index = int(ts_series[ts_series == nearest_ts].index[0])
+                    else:
+                        chart_end_index = len(ts_series) - 1  # fallback: last candle
 
-                    # Keep highlighted list in sync with navigation
+                    # 4) save nav pointer
+                    nav_positions            = self.states.chart_navigation
+                    nav_positions[crypto]    = chart_end_index
+                    self.states.chart_navigation = nav_positions
+
+                    # 5) keep highlight list in sync
                     if crypto not in self.states.highlighted_candles:
                         self.states.highlighted_candles[crypto] = []
-                    
-                    # Add the new timestamp to highlights if not already present
                     if next_ts not in self.states.highlighted_candles[crypto]:
                         self.states.highlighted_candles[crypto].append(next_ts)
 
                     st.rerun()
-                        
+                                        
                 try:
                     filtered = pd.read_csv("data/filtered_backtest.csv")
                     filtered["timestamp"] = pd.to_datetime(filtered["timestamp"])
@@ -348,131 +353,83 @@ class OHLCChartCreator:
                 )
 
     def _add_auto_panning(self, fig, df, chart_position, highlighted_timestamps, timeframe, crypto, start_time=None):
-        """Add auto-panning functionality to focus on navigation or highlights"""
-        
-        if getattr(self.states, "chart_end", None) is not None:
-            end_time = self.states.chart_end               # right-most x-axis value
 
-            # Optional: if you’d rather snap to an actual candle when one exists,
-            # uncomment the 5 lines below.
-            # ts_series = df['timestamp']
-            # valid_ts  = ts_series[ts_series <= end_time]
-            # if not valid_ts.empty:
-            #     end_time = valid_ts.max()                # nearest ≤ highlight
+        """Auto-pan priority: Navigation > chart_end (hit) > Highlights > None.
+        NOTE: chart_end is NOT cleared; nav simply takes precedence when present.
+        """
+
+        # --- 1) Manual navigation (Back/Forward) takes priority ---
+        if chart_position is not None and 0 <= chart_position < len(df):
+            end_time = df.iloc[chart_position]['timestamp']
+            start_time = self._calculate_window_start(end_time, timeframe, df)
+            fig.update_xaxes(range=[start_time, end_time], type='date')
+            # Do NOT clear chart_end; it remains stored but ignored while nav is active.
+            return
+
+        # --- 2) chart_end (hit testing) next ---
+        if getattr(self.states, "chart_end", None) is not None:
+            end_time = self.states.chart_end
+
+            # Snap to an actual candle at or before end_time
+            ts_series = df['timestamp']
+            if end_time in set(ts_series):
+                nav_idx = int(ts_series[ts_series == end_time].index[0])
+            else:
+                le = ts_series[ts_series <= end_time]
+                nav_idx = int(le.index.max()) if not le.empty else len(df) - 1
+                end_time = df.iloc[nav_idx]['timestamp']
+
+            # Keep navigation pointer consistent so Forward/Back works from here
+            nav_positions = self.states.chart_navigation
+            nav_positions[crypto] = nav_idx
+            self.states.chart_navigation = nav_positions
 
             start_time = self._calculate_window_start(end_time, timeframe, df)
             fig.update_xaxes(range=[start_time, end_time], type='date')
+            return
 
-            # Keep navigation pointer consistent so Back/Forward buttons work
-            ts_series = df['timestamp']
-            nav_idx   = (
-                int(ts_series[ts_series == end_time].index[0])
-                if end_time in set(ts_series)
-                else int(ts_series[ts_series <= end_time].index.max())
-                if not ts_series[ts_series <= end_time].empty
-                else len(df) - 1
-            )
-            nav_positions              = self.states.chart_navigation
-            nav_positions[crypto]      = nav_idx
-            self.states.chart_navigation = nav_positions
-            return  # highlight takes absolute priority; skip other auto-pan logic
-
-        # Check if we have highlights first
+        # --- 3) Highlights (only if nav & chart_end inactive) ---
         if highlighted_timestamps:
             prev_highlights_key = f"prev_highlighted_candles_{crypto}"
             prev_highlights = st.session_state.get(prev_highlights_key, [])
-            
-            # If we have new highlights, use highlight positioning (priority over navigation)
-            if len(highlighted_timestamps) > len(prev_highlights):
-                latest_highlight = max(highlighted_timestamps)
-                
-                # Find the index of the highlighted timestamp in the dataframe
-                matching_rows = df[df['timestamp'] == latest_highlight]
-                if matching_rows.empty:
-                    # Find closest earlier timestamp
-                    earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
-                    if not earlier_timestamps.empty:
-                        closest_timestamp = earlier_timestamps.max()
-                        matching_rows = df[df['timestamp'] == closest_timestamp]
-                
-                if not matching_rows.empty:
-                    # Get the index of the highlighted candle
-                    highlight_index = matching_rows.index[0]
-                    # Use the same positioning logic as navigation
-                    # highlight_time = df.iloc[highlight_index]['timestamp']
-                    highlight_time = latest_highlight
+
+            latest_highlight = max(highlighted_timestamps)
+
+            # Find matching (or closest earlier) candle
+            matching_rows = df[df['timestamp'] == latest_highlight]
+            if matching_rows.empty:
+                earlier = df[df['timestamp'] <= latest_highlight]['timestamp']
+                if not earlier.empty:
+                    closest = earlier.max()
+                    matching_rows = df[df['timestamp'] == closest]
+
+            if not matching_rows.empty:
+                highlight_index = int(matching_rows.index[0])
+                highlight_time = df.iloc[highlight_index]['timestamp']
+
+                # Pan to the latest highlight if it's new; otherwise still pan (since nothing else is active)
+                if len(highlighted_timestamps) > len(prev_highlights) or True:
                     start_time = self._calculate_window_start(highlight_time, timeframe, df)
-                    
-                    fig.update_xaxes(
-                        range=[start_time, highlight_time],
-                        type='date'
-                    )
-                    
-                    # IMPORTANT: Update navigation position to match the highlighted position
-                    # This ensures navigation buttons work correctly after highlighting
+                    fig.update_xaxes(range=[start_time, highlight_time], type='date')
+
+                    # Sync nav pointer with highlight
                     nav_positions = self.states.chart_navigation
-                    nav_positions[crypto] = int(highlight_index)  # Ensure it's a Python int, not numpy type
+                    nav_positions[crypto] = highlight_index
                     self.states.chart_navigation = nav_positions
-                    
-                    # Update the previous highlights state to prevent re-panning
+
                     st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
-                    return  # Exit early after handling highlight positioning
-            
-            # If we have existing highlights, check if navigation is different from highlight position
-            # If so, navigation buttons are being used and should take priority
+                    return
             else:
-                latest_highlight = max(highlighted_timestamps)
-                
-                # Find the index of the highlighted timestamp in the dataframe
-                matching_rows = df[df['timestamp'] == latest_highlight]
-                if matching_rows.empty:
-                    # Find closest earlier timestamp for approximate match
-                    earlier_timestamps = df[df['timestamp'] <= latest_highlight]['timestamp']
-                    if not earlier_timestamps.empty:
-                        closest_timestamp = earlier_timestamps.max()
-                        matching_rows = df[df['timestamp'] == closest_timestamp]
-                
-                if not matching_rows.empty:
-                    highlight_index = matching_rows.index[0]
-                    
-                    # Check if navigation position is different from highlight position
-                    # If different, user is navigating and navigation should take priority
-                    if chart_position is not None and chart_position != highlight_index:
-                        # Use navigation position instead of highlight
-                        if 0 <= chart_position < len(df):
-                            end_time = df.iloc[chart_position]['timestamp']
-                            start_time = self._calculate_window_start(end_time, timeframe, df)
-                            fig.update_xaxes(range=[start_time, end_time])
-                            return
-                    
-                    # Otherwise, use highlight positioning
-                    # highlight_time = df.iloc[highlight_index]['timestamp']
-                    highlight_time = latest_highlight
-                    start_time = self._calculate_window_start(highlight_time, timeframe, df)
-                    
-                    fig.update_xaxes(
-                        range=[start_time, highlight_time],
-                        type='date'
-                    )
-                    return  # Exit early - highlights take priority when navigation matches
-                
-                # If no valid highlights found, clear them and fall through to navigation
-                else:
-                    highlights = self.states.highlighted_candles
-                    if crypto in highlights:
-                        highlights[crypto] = []
-                        self.states.highlighted_candles = highlights
-                    # Clear previous highlights state
-                    if prev_highlights_key in st.session_state:
-                        del st.session_state[prev_highlights_key]
-        
-        # Use navigation position when no highlights exist or when highlights are cleared
-        if chart_position is not None:
-            if 0 <= chart_position < len(df):
-                end_time = df.iloc[chart_position]['timestamp']
-                start_time = self._calculate_window_start(end_time, timeframe, df)
-                
-                fig.update_xaxes(range=[start_time, end_time])
+                # Clear invalid highlights and fall through
+                highlights = self.states.highlighted_candles
+                if crypto in highlights:
+                    highlights[crypto] = []
+                    self.states.highlighted_candles = highlights
+                if prev_highlights_key in st.session_state:
+                    del st.session_state[prev_highlights_key]
+
+        # --- 4) Nothing to do ---
+        return
 
     def _calculate_window_start(self, end_time, timeframe, df):
         """Calculate the start time for the chart window"""
@@ -504,7 +461,7 @@ class OHLCChartCreator:
         
         # Changes height of chart as more indicators are added.
         n_rows = 1 + len(sep_inds)
-        weights = [3] + [1] * len(sep_inds)
+        weights = [4] + [1] * len(sep_inds)
         total_weight = sum(weights)
         row_heights = [w/total_weight for w in weights]
 
@@ -537,24 +494,51 @@ class OHLCChartCreator:
 
         fig.update_yaxes(title_text='Price (USDT)', row=1, col=1)
         
+        # Map indicator names -> (constructor, params_key)
+        name_map = {
+            "RSI": (RSIIndicator, "RSI"),
+            "Bollinger Band": (BollingerBandsIndicator, "Bollinger Band"),
+            "KDJ": (KDJIndicator, "KDJ"),
+            "Half Trend": (HalfTrendIndicator, "Half Trend"),
+            "William % Range": (WilliamsRIndicator, "William % Range"),
+
+            # Stochastic variants (all use StochasticIndicator, keyed separately)
+            "Stochastic":  (StochasticIndicator, "Stochastic"),
+            "Stochastic2": (StochasticIndicator, "Stochastic2"),
+            "Stochastic3": (StochasticIndicator, "Stochastic3"),
+            "Stochastic4": (StochasticIndicator, "Stochastic4"),
+        }
+
         for ind in self.selected_indicators:
-            if ind == "RSI":
-                indicator = RSIIndicator(**self.indicator_params.get("RSI", {}))
-            elif ind == "Bollinger Band":
-                indicator = BollingerBandsIndicator(**self.indicator_params.get("Bollinger Band", {}))
-            elif ind == "KDJ":
-                indicator = KDJIndicator(**self.indicator_params.get("KDJ", {}))
-            elif ind == "Half Trend":
-                indicator = HalfTrendIndicator(**self.indicator_params.get("Half Trend", {}))
-            elif ind == "William % Range":
-                indicator = WilliamsRIndicator(**self.indicator_params.get("William % Range", {}))
-            else:
+            entry = name_map.get(ind)
+            if not entry:
                 continue
 
-            self.df[crypto] = indicator.calculate(self.df[crypto])
+            ctor, params_key = entry
+            params = dict(self.indicator_params.get(params_key, {}))  # copy so we can modify
 
-            indicator.add_traces(fig, self.df[crypto], 1 if ind not in sep_inds else sep_inds.index(ind) + 2)
-            
+            # Inject suffix / plotting defaults for Stochastic variants
+            if ctor is StochasticIndicator:
+                # "", "2", "3", "4"
+                suffix = "" if ind == "Stochastic" else ind.replace("Stochastic", "")
+                params.setdefault("suffix", suffix)
+
+            indicator = ctor(**params)
+
+            # Optional: give each instance a distinct legend/display name
+            try:
+                indicator.name = ind
+            except Exception:
+                pass
+
+            # Calculate & plot
+            self.df[crypto] = indicator.calculate(self.df[crypto])
+            indicator.add_traces(
+                fig,
+                self.df[crypto],
+                1 if ind not in sep_inds else sep_inds.index(ind) + 2
+            )
+
         # Update layout
         fig.update_layout(
             title=f'{AVAILABLE_CRYPTOS[crypto]} - {self.timeframe} Chart',

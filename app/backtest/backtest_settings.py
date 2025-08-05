@@ -1,12 +1,13 @@
 import streamlit as st
 from datetime import datetime, timedelta
 
-from app.backtest.back_tester import CryptoBacktester
+from app.backtest.backtester import CryptoBacktester
 from app.indicators.half_trend import HalfTrendIndicator
 from app.indicators.bollinger_bands import BollingerBandsIndicator
 from app.indicators.rsi import RSIIndicator
 from app.indicators.williams_r import WilliamsRIndicator
 from app.indicators.kdj import KDJIndicator
+from app.indicators.stochastic import StochasticIndicator
 from app.config import *
 
 class BacktestSettings:
@@ -65,6 +66,19 @@ class BacktestSettings:
         if "RSI" in self.selected_indicators:
             indicator_conditions["RSI_U"] = st.number_input("RSI Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_rsi_u")
             indicator_conditions["RSI_L"] = st.number_input("RSI Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_rsi_l")
+
+        if "Stochastic" in self.selected_indicators:
+            indicator_conditions["ST_U"] = st.number_input("Stoch Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u")
+            indicator_conditions["ST_L"] = st.number_input("Stoch Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l")
+        if "Stochastic2" in self.selected_indicators:
+            indicator_conditions["ST_U2"] = st.number_input("Stoch2 Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u2")
+            indicator_conditions["ST_L2"] = st.number_input("Stoch2 Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l2")
+        if "Stochastic3" in self.selected_indicators:
+            indicator_conditions["ST_U3"] = st.number_input("Stoch3 Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u3")
+            indicator_conditions["ST_L3"] = st.number_input("Stoch3 Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l3")
+        if "Stochastic4" in self.selected_indicators:
+            indicator_conditions["ST_U4"] = st.number_input("Stoch4 Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u4")
+            indicator_conditions["ST_L4"] = st.number_input("Stoch4 Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l4")
 
         # William %R conditions
         if "William % Range" in self.selected_indicators:
@@ -125,28 +139,28 @@ class BacktestSettings:
             # Fetches data to store for faster transition between timeframes
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
-                '15m', self.states.ob.start_date, self.states.ob.end_date
-                ).to_csv("data/15m_df.csv", index=False)
+                '1m', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/1m_df.csv", index=False)
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '3m', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/3m_df.csv", index=False)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '5m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/5m_df.csv", index=False)
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '3m', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/3m_df.csv", index=False)
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '1m', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/1m_df.csv", index=False)
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '15m', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/15m_df.csv", index=False)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1h', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1h_df.csv", index=False)
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '4h', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/4h_df.csv", index=False)
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '4h', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/4h_df.csv", index=False)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1d', self.states.ob.start_date, self.states.ob.end_date
@@ -164,8 +178,11 @@ class BacktestSettings:
                         indicator = HalfTrendIndicator(**self.indicator_params.get("Half Trend", {}))
                     elif ind == "William % Range":
                         indicator = WilliamsRIndicator(**self.indicator_params.get("William % Range", {}))
+                    elif ind == "Stochastic":
+                        indicator = StochasticIndicator(**self.indicator_params.get("Stochastic", {}))
 
                     df = indicator.calculate(df)
+
             df.to_csv("data/og_backtest.csv", index=False)
             hits = self.states.ob.find_hits(df)
             hits["timestamp"].to_csv("data/filtered_backtest.csv", index=False)
