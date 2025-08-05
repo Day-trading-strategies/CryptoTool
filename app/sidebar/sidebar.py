@@ -84,3 +84,29 @@ class Sidebar:
             self.indicator_params["Half Trend"] = {
                 "amplitude":     st.sidebar.number_input("HT Amplitude", 2, 50, 5, key="HT_p"),
             }
+
+        # STOCHASTIC PARAMS
+        stochastic_variants = ["Stochastic", "Stochastic2", "Stochastic3", "Stochastic4"]
+
+        for name in self.selected_indicator:
+            if name in stochastic_variants:
+                # suffix lets each variant keep distinct Streamlit widget keys
+                suffix = "" if name == "Stochastic" else name[-1]
+
+                with st.sidebar.expander(f"{name} parameters", expanded=False):
+                    k_window     = st.number_input(
+                        "%K Window", 2, 100, 14, key=f"ST_w{suffix}"
+                    )
+                    k_smoothing  = st.number_input(
+                        "%K Smoothing", 1, 50, 1,  key=f"ST_ks{suffix}"
+                    )
+                    d_smoothing  = st.number_input(
+                        "%D Smoothing", 1, 50, 3,  key=f"ST_ds{suffix}"
+                    )
+
+                # store params exactly under the indicator’s own name
+                self.indicator_params[name] = {
+                    "k_window":    k_window,
+                    "k_smoothing": k_smoothing,
+                    "d_smoothing": d_smoothing,
+                }

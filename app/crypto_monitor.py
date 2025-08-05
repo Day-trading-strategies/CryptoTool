@@ -6,7 +6,7 @@ from api.binance.data_fetcher import BinanceDataFetcher
 from app.sidebar.sidebar import Sidebar
 from app.charts.ohlc_chart import OHLCChartCreator
 from app.charts.price_summary import PriceSummary
-from app.backtest_settings.backtest_settings import BacktestSettings
+from app.backtest.backtest_settings import BacktestSettings
 from app.state_manager import SessionStateManager
 
 from app.config import *
@@ -72,7 +72,7 @@ class CryptoMonitor:
                                                self.data_fetcher,
                                                self.sidebar.selected_indicator,
                                                self.sidebar.indicator_params, self.states, highlighted_timestamps, chart_positions)
-        self.backtest_settings = BacktestSettings(self.sidebar.selected_indicator, self.states)
+        self.backtest_settings = BacktestSettings(self.sidebar.selected_indicator, self.sidebar.selected_timeframe, self.states, self.data_fetcher, self.sidebar.indicator_params)
         
     def _render_footer(self):
         # Footer

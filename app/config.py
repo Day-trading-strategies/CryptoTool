@@ -10,7 +10,17 @@ AVAILABLE_CRYPTOS = {
     'SOL': 'SOL/USDT'
 }
 
-AVAILABLE_INDICATORS = ["RSI", "Bollinger Band", "KDJ", "Half Trend", "William % Range"]
+AVAILABLE_INDICATORS = [
+    "Stochastic",
+    "Stochastic2",
+    "Stochastic3",
+    "Stochastic4",
+    "RSI", 
+    "Bollinger Band", 
+    "KDJ", 
+    "Half Trend", 
+    "William % Range"
+    ]
 
 # Available timeframes
 TIMEFRAMES = {
@@ -27,11 +37,15 @@ TIMEFRAMES = {
 SEPARATE_AX_INDICATORS ={
     "RSI",
     "William % Range",
-    "KDJ"
+    "KDJ",
+    "Stochastic",
+    "Stochastic2",
+    "Stochastic3",
+    "Stochastic4",
 }
 
 # Chart settings
-CHART_HEIGHT = 700
+CHART_HEIGHT = 800
 CACHE_TTL_OHLC = 120  # seconds
 CACHE_TTL_PRICE = 60  # seconds
 AUTO_REFRESH_INTERVAL = 10  # seconds

@@ -14,6 +14,9 @@ class CandlestickHighlighter:
     
     def render(self):
         """Render highlighting controls"""
+        # Handle timeframe changes first
+        self._handle_timeframe_changes()
+        
         st.markdown("**🎯 Highlight Candlesticks:**")
         
         col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -44,6 +47,29 @@ class CandlestickHighlighter:
         self._handle_auto_pan_to_highlights()
         
         return self._get_highlighted_timestamps()
+    
+    def _handle_timeframe_changes(self):
+        """Handle timeframe changes by clearing highlights"""
+        timeframe_key = f"timeframe_{self.crypto}_highlighter"
+        current_timeframe = st.session_state.get('selected_timeframe', '1h')
+        previous_timeframe = st.session_state.get(timeframe_key, None)
+        
+        if previous_timeframe != current_timeframe:
+            # DON'T clear highlights when timeframe changes - let them persist
+            # The auto-panning logic will handle finding approximate matches
+            
+            # Clear previous highlights state for auto-panning detection
+            prev_highlights_key = f"prev_highlighted_candles_{self.crypto}"
+            if prev_highlights_key in st.session_state:
+                del st.session_state[prev_highlights_key]
+            
+            # Clear other crypto-specific highlight session state if needed
+            crypto_highlight_keys = [key for key in st.session_state.keys() 
+                                   if f"highlighted_candles_{self.crypto}" in key and key != prev_highlights_key]
+            for key in crypto_highlight_keys:
+                del st.session_state[key]
+            
+            st.session_state[timeframe_key] = current_timeframe
     
     def _render_datetime_picker(self, key_suffix):
         """Render date and time picker"""
@@ -125,37 +151,9 @@ class CandlestickHighlighter:
     
     def _handle_auto_pan_to_highlights(self):
         """Handle auto-pan logic when new highlights are added"""
-        highlighted_timestamps = self._get_highlighted_timestamps()
-        
-        if highlighted_timestamps:
-            prev_highlights_key = f"prev_highlighted_candles_{self.crypto}"
-            prev_highlights = st.session_state.get(prev_highlights_key, [])
-            
-            # If we have new highlights, auto-pan to the latest one
-            if len(highlighted_timestamps) > len(prev_highlights):
-                latest_highlight = max(highlighted_timestamps)
-                
-                # Find the closest matching row in the dataframe
-                matching_rows = self.df[self.df['timestamp'] == latest_highlight]
-                if matching_rows.empty:
-                    # Find closest earlier timestamp
-                    earlier_timestamps = self.df[self.df['timestamp'] <= latest_highlight]['timestamp']
-                    if not earlier_timestamps.empty:
-                        closest_timestamp = earlier_timestamps.max()
-                        matching_rows = self.df[self.df['timestamp'] == closest_timestamp]
-                
-                if not matching_rows.empty:
-                    # Update navigation position to the highlighted candlestick
-                    actual_timestamp = matching_rows.iloc[0]['timestamp']
-                    position_rows = self.df[self.df['timestamp'] == actual_timestamp]
-                    if not position_rows.empty:
-                        highlight_position = int(position_rows.index[0])
-                        nav_positions = self.states.chart_navigation
-                        nav_positions[self.crypto] = highlight_position
-                        self.states.chart_navigation = nav_positions
-                
-                # Update the previous highlights state
-                st.session_state[prev_highlights_key] = highlighted_timestamps.copy()
+        # Auto-panning is now handled in the main chart's _add_auto_panning method
+        # This method no longer needs to update navigation positions
+        pass
     
     def _show_current_highlights(self):
         """Display current highlights"""
