@@ -45,7 +45,7 @@ class KDJIndicator(Indicator):
                 x=df["timestamp"],
                 y=df["%K"],
                 mode="lines",
-                line=dict(color="rgba(255,0,0,1)", width=1),
+                line=dict(color="rgba(250,50,150,1)", width=1),
                 opacity = 0.6,
                 name="K (20)"
             ),
@@ -56,7 +56,7 @@ class KDJIndicator(Indicator):
                 x=df["timestamp"],
                 y=df["%D"],
                 mode="lines",
-                line=dict(color="rgba(51,153,255,0.8)", width=1),
+                line=dict(color="rgba(50,150,255,1)", width=1),
                 name="D",
             ),
             row=row, col=1
@@ -66,7 +66,7 @@ class KDJIndicator(Indicator):
                 x=df["timestamp"],
                 y=df["%J"],
                 mode="lines",
-                line=dict(color="rgba(51,153,255,0.8)", width=1),
+                line=dict(color="rgba(1,250,255,0.8)", width=1),
                 name="J",
             ),
             row=row, col=1

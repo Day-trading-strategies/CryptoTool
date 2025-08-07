@@ -54,6 +54,18 @@ class OHLCChartCreator:
             print("bt_mode on")
             crypto = self.states.crypto
 
+            # detects if timeframe has changed, and reassign chart_end to time of last candlestick in the previous timeframe.
+            prev_tf = self.states.previous_timeframe
+            if prev_tf and prev_tf != self.timeframe:
+                old_idx = self.states.chart_navigation.get(crypto)
+                old_df  = self.states.df
+                if old_idx is not None and old_df is not None and not old_df.empty:
+                    old_ts = old_df.iloc[old_idx]["timestamp"]
+                    self.states.chart_end = old_ts
+                
+            # remember that we’ve now initialised this timeframe
+            self.states.previous_timeframe = self.timeframe
+                    
             # if timeframe is {something} 
             # self.states.df is {csvs_name}.csv
             if self.timeframe == "15m":
@@ -72,6 +84,16 @@ class OHLCChartCreator:
                 self.states.df = pd.read_csv("data/1d.csv", parse_dates=["timestamp"])
 
             self.df[crypto] = self.states.df
+
+            # detects if we changed timeframes, then reasigns chart_position to the timestamp we converted above.
+            if prev_tf and prev_tf != self.timeframe:
+                ts_series = self.df[crypto]["timestamp"]
+                valid     = ts_series[ts_series <= self.states.chart_end]
+                new_idx   = int(valid.index.max()) if not valid.empty else len(ts_series) - 1
+                nav_map   = self.states.chart_navigation
+                nav_map[crypto] = new_idx
+                self.states.chart_navigation = nav_map
+                
             # Create component instances for backtest
             navigator = ChartNavigation(crypto, self.df[crypto], self.states)
             highlighter = CandlestickHighlighter(crypto, self.df[crypto], self.states)
@@ -84,7 +106,7 @@ class OHLCChartCreator:
             fig = self.create_chart(crypto, highlighted_timestamps, current_position)
             self.df[crypto].to_csv("data/backtest_data.csv", index=False)
 
-            # if user chooses a hit point to test, create chart from start to hit point
+            # if chart end exists, create chart from start to chart end.
             if self.states.chart_end:
                 temp_df = self.df[crypto].copy()
                 end_idx = self.states.chart_navigation[crypto]
@@ -160,8 +182,8 @@ class OHLCChartCreator:
                     # 5) keep highlight list in sync
                     if crypto not in self.states.highlighted_candles:
                         self.states.highlighted_candles[crypto] = []
-                    if next_ts not in self.states.highlighted_candles[crypto]:
-                        self.states.highlighted_candles[crypto].append(next_ts)
+                    # if next_ts not in self.states.highlighted_candles[crypto]:
+                    #     self.states.highlighted_candles[crypto].append(next_ts)
 
                     st.rerun()
                                         
@@ -199,7 +221,17 @@ class OHLCChartCreator:
                                 else:
                                     chart_end_index = len(ts_series) - 1
 
-                                self.states.chart_navigation[crypto] = chart_end_index
+                                # updating chart_position.
+                                nav = self.states.chart_navigation
+                                nav[crypto] = chart_end_index
+                                self.states.chart_navigation = nav
+                                
+                                # similar funciton to _add_auto_pan but manual after next button.
+                                # self.states.chart_navigation[crypto] = chart_end_index
+                                # end_time = self.df[crypto].iloc[current_position]['timestamp']
+                                # self.states.chart_end = end_time
+                                # start_time = self._calculate_window_start(end_time, self.timeframe, self.df[crypto])
+                                # fig.update_xaxes(range=[start_time, end_time], type='date')
                                 st.rerun()
                                 # # parse back into a datetime
                                 # self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
@@ -361,13 +393,15 @@ class OHLCChartCreator:
         # --- 1) Manual navigation (Back/Forward) takes priority ---
         if chart_position is not None and 0 <= chart_position < len(df):
             end_time = df.iloc[chart_position]['timestamp']
+            self.states.chart_end = end_time
             start_time = self._calculate_window_start(end_time, timeframe, df)
             fig.update_xaxes(range=[start_time, end_time], type='date')
             # Do NOT clear chart_end; it remains stored but ignored while nav is active.
             return
 
-        # --- 2) chart_end (hit testing) next ---
-        if getattr(self.states, "chart_end", None) is not None:
+        # if chart_positions not assigned or outside.
+        if self.states.chart_end is not None:
+            print("chart end exists!.")
             end_time = self.states.chart_end
 
             # Snap to an actual candle at or before end_time
@@ -388,8 +422,9 @@ class OHLCChartCreator:
             fig.update_xaxes(range=[start_time, end_time], type='date')
             return
 
-        # --- 3) Highlights (only if nav & chart_end inactive) ---
+        # if nav & chart_end inactive
         if highlighted_timestamps:
+            print("highlighted_timestamps found!")
             prev_highlights_key = f"prev_highlighted_candles_{crypto}"
             prev_highlights = st.session_state.get(prev_highlights_key, [])
 
@@ -399,7 +434,7 @@ class OHLCChartCreator:
             matching_rows = df[df['timestamp'] == latest_highlight]
             if matching_rows.empty:
                 earlier = df[df['timestamp'] <= latest_highlight]['timestamp']
-                if not earlier.empty:
+                if not earlier.empty:   
                     closest = earlier.max()
                     matching_rows = df[df['timestamp'] == closest]
 
@@ -461,7 +496,7 @@ class OHLCChartCreator:
         
         # Changes height of chart as more indicators are added.
         n_rows = 1 + len(sep_inds)
-        weights = [4] + [1] * len(sep_inds)
+        weights = [5] + [1] * len(sep_inds)
         total_weight = sum(weights)
         row_heights = [w/total_weight for w in weights]
 
@@ -480,6 +515,7 @@ class OHLCChartCreator:
                 high=self.df[crypto]['high'],
                 low=self.df[crypto]['low'],
                 close=self.df[crypto]['close'],
+                
                 name='Price',
                 increasing_line_color=BULLISH_COLOR,
                 decreasing_line_color=BEARISH_COLOR,

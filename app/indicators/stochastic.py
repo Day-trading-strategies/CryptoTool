@@ -109,7 +109,7 @@ class StochasticIndicator(Indicator):
             go.Scatter(
                 x=x, y=[80] * n,
                 mode="lines",
-                line=dict(width=1, dash="dash", color="gray"),
+                line=dict(width=1, color="white"),
                 opacity=0.6,
                 name="Overbought (80)",
                 hoverinfo="skip",
@@ -121,7 +121,7 @@ class StochasticIndicator(Indicator):
             go.Scatter(
                 x=x, y=[20] * n,
                 mode="lines",
-                line=dict(width=1, dash="dash", color="gray"),
+                line=dict(width=1, color="white"),
                 opacity=0.6,
                 name="Oversold (20)",
                 hoverinfo="skip",

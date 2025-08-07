@@ -16,7 +16,7 @@ class SessionStateManager:
         "ob": None,
         "highlighted_candles": {},
         "chart_navigation": {}, 
-        "previous_timeframes": {},
+        "previous_timeframe": None,
         "previous_highlights": {}   
     }
     def __init__(self):
@@ -108,12 +108,12 @@ class SessionStateManager:
         st.session_state["chart_navigation"] = value
 
     @property
-    def previous_timeframes(self) -> dict:
-        return st.session_state["previous_timeframes"]
+    def previous_timeframe(self) -> dict:
+        return st.session_state["previous_timeframe"]
     
-    @previous_timeframes.setter
-    def previous_timeframes(self, value: dict):
-        st.session_state["previous_timeframes"] = value
+    @previous_timeframe.setter
+    def previous_timeframe(self, value):
+        st.session_state["previous_timeframe"] = value
     
     @property
     def previous_highlights(self) -> dict:

@@ -137,14 +137,14 @@ class BacktestSettings:
                 )
             
             # Fetches data to store for faster transition between timeframes
-            self.data_fetcher.fetch_ohlc_data_range(
-                AVAILABLE_CRYPTOS[self.states.crypto], 
-                '1m', self.states.ob.start_date, self.states.ob.end_date
-                ).to_csv("data/1m_df.csv", index=False)
-            self.data_fetcher.fetch_ohlc_data_range(
-                AVAILABLE_CRYPTOS[self.states.crypto], 
-                '3m', self.states.ob.start_date, self.states.ob.end_date
-                ).to_csv("data/3m_df.csv", index=False)
+            # self.data_fetcher.fetch_ohlc_data_range(
+            #     AVAILABLE_CRYPTOS[self.states.crypto], 
+            #     '1m', self.states.ob.start_date, self.states.ob.end_date
+            #     ).to_csv("data/1m_df.csv", index=False)
+            # self.data_fetcher.fetch_ohlc_data_range(
+            #     AVAILABLE_CRYPTOS[self.states.crypto], 
+            #     '3m', self.states.ob.start_date, self.states.ob.end_date
+            #     ).to_csv("data/3m_df.csv", index=False)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '5m', self.states.ob.start_date, self.states.ob.end_date
@@ -157,16 +157,17 @@ class BacktestSettings:
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1h', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1h_df.csv", index=False)
-            self.data_fetcher.fetch_ohlc_data_range(
-                AVAILABLE_CRYPTOS[self.states.crypto], 
-                '4h', self.states.ob.start_date, self.states.ob.end_date
-                ).to_csv("data/4h_df.csv", index=False)
+            # self.data_fetcher.fetch_ohlc_data_range(
+            #     AVAILABLE_CRYPTOS[self.states.crypto], 
+            #     '4h', self.states.ob.start_date, self.states.ob.end_date
+            #     ).to_csv("data/4h_df.csv", index=False)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1d', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1d_df.csv", index=False)
             
             if self.selected_indicators != []:
+                print()
                 for ind in self.selected_indicators:
                     if ind == "RSI":
                         indicator = RSIIndicator(**self.indicator_params.get("RSI", {}))
@@ -180,6 +181,12 @@ class BacktestSettings:
                         indicator = WilliamsRIndicator(**self.indicator_params.get("William % Range", {}))
                     elif ind == "Stochastic":
                         indicator = StochasticIndicator(**self.indicator_params.get("Stochastic", {}))
+                    elif ind == "Stochastic2":
+                        indicator = StochasticIndicator(**self.indicator_params.get("Stochastic2", {}), suffix="2")
+                    elif ind == "Stochastic3":
+                        indicator = StochasticIndicator(**self.indicator_params.get("Stochastic3", {}), suffix="3")
+                    elif ind == "Stochastic4":
+                        indicator = StochasticIndicator(**self.indicator_params.get("Stochastic4", {}), suffix="4")
 
                     df = indicator.calculate(df)
 

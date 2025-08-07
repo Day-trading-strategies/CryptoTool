@@ -29,33 +29,57 @@ class CryptoBacktester:
             if has_rsi_down:
                 conds.append(df["rsi"] <= self.indicator_conditions["RSI_L"])
 
-        # Stochastic Upper and Lower bound conditions
-        st_variants = [
-            ("stoch_d",  "ST_U",  "ST_L"),
-            ("stoch_d2", "ST2_U", "ST2_L"),
-            ("stoch_d3", "ST3_U", "ST3_L"),
-            ("stoch_d4", "ST4_U", "ST4_L"),
-        ]
+        has_st_up   = "ST_U" in self.indicator_conditions and self.indicator_conditions["ST_U"] is not None
+        has_st_down = "ST_L" in self.indicator_conditions and self.indicator_conditions["ST_L"] is not None
 
-        for d_col, up_key, dn_key in st_variants:
-            if d_col not in df.columns:
-                continue
-            has_st_up   = up_key in self.indicator_conditions and self.indicator_conditions[up_key] is not None
-            has_st_down = dn_key in self.indicator_conditions and self.indicator_conditions[dn_key] is not None
-            if not (has_st_up or has_st_down):
-                continue
+        if has_st_up and has_st_down:
+            up   = df["stoch_d"] >= self.indicator_conditions["ST_U"]
+            down = df["stoch_d"] <= self.indicator_conditions["ST_L"]
+            conds.append(up | down)
+        else:
+            if has_st_up:
+                conds.append(df["stoch_d"] >= self.indicator_conditions["ST_U"])
+            if has_st_down:
+                conds.append(df["stoch_d"] <= self.indicator_conditions["ST_L"])
 
-            series = df[d_col]
-            if has_st_up and has_st_down:
-                up   = series >= self.indicator_conditions[up_key]
-                down = series <= self.indicator_conditions[dn_key]
-                conds.append(up | down)
-            else:
-                if has_st_up:
-                    conds.append(series >= self.indicator_conditions[up_key])
-                if has_st_down:
-                    conds.append(series <= self.indicator_conditions[dn_key])
-        
+        has_st_up   = "ST_U2" in self.indicator_conditions and self.indicator_conditions["ST_U2"] is not None
+        has_st_down = "ST_L2" in self.indicator_conditions and self.indicator_conditions["ST_L2"] is not None
+
+        if has_st_up and has_st_down:
+            up   = df["stoch_d2"] >= self.indicator_conditions["ST_U2"]
+            down = df["stoch_d2"] <= self.indicator_conditions["ST_L2"]
+            conds.append(up | down)
+        else:
+            if has_st_up:
+                conds.append(df["stoch_d2"] >= self.indicator_conditions["ST_U2"])
+            if has_st_down:
+                conds.append(df["stoch_d2"] <= self.indicator_conditions["ST_L2"])
+
+        has_st_up   = "ST_U3" in self.indicator_conditions and self.indicator_conditions["ST_U3"] is not None
+        has_st_down = "ST_L3" in self.indicator_conditions and self.indicator_conditions["ST_L3"] is not None
+
+        if has_st_up and has_st_down:
+            up   = df["stoch_d3"] >= self.indicator_conditions["ST_U3"]
+            down = df["stoch_d3"] <= self.indicator_conditions["ST_L3"]
+            conds.append(up | down)
+        else:
+            if has_st_up:
+                conds.append(df["stoch_d3"] >= self.indicator_conditions["ST_U3"])
+            if has_st_down:
+                conds.append(df["stoch_d3"] <= self.indicator_conditions["ST_L3"])
+
+        has_st_up   = "ST_U4" in self.indicator_conditions and self.indicator_conditions["ST_U4"] is not None
+        has_st_down = "ST_L4" in self.indicator_conditions and self.indicator_conditions["ST_L4"] is not None
+
+        if has_st_up and has_st_down:
+            up   = df["stoch_d4"] >= self.indicator_conditions["ST_U4"]
+            down = df["stoch_d4"] <= self.indicator_conditions["ST_L4"]
+            conds.append(up | down)
+        else:
+            if has_st_up:
+                conds.append(df["stoch_d4"] >= self.indicator_conditions["ST_U4"])
+            if has_st_down:
+                conds.append(df["stoch_d4"] <= self.indicator_conditions["ST_L4"])
 
         if "ht_buy" in self.indicator_conditions:
             conds.append(df["ht_up"] == True)
