@@ -1,8 +1,10 @@
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+from streamlit_plotly_events import plotly_events
 import pandas as pd
 from datetime import datetime
+import numpy as np
 
 from app.config import *
 
@@ -102,8 +104,11 @@ class OHLCChartCreator:
             highlighted_timestamps = highlighter.render()
             current_position = navigator.render()
 
+            # for hover_indicators
+            data_box = st.empty()       # ← this box will update on hover
 
-            fig = self.create_chart(crypto, highlighted_timestamps, current_position)
+
+            fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, current_position)
             self.df[crypto].to_csv("data/backtest_data.csv", index=False)
 
             # if chart end exists, create chart from start to chart end.
@@ -115,14 +120,15 @@ class OHLCChartCreator:
                 # Adjust current_position for truncated data
                 adjusted_position = current_position if current_position is not None and current_position <= end_idx else None
                 
-                fig = self.create_chart(crypto, highlighted_timestamps, adjusted_position)
+                fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, adjusted_position)
                 self.df[crypto] = temp_df
             else:
                 # create chart with original data (entire dataset)
                 current_position = navigator.navigate_to_latest()
                 print(current_position)
 
-                fig = self.create_chart(crypto, highlighted_timestamps, current_position)
+                fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, current_position)
+
 
             if fig:
                 st.plotly_chart(
@@ -135,6 +141,8 @@ class OHLCChartCreator:
                         'showTips': False,
                         'displaylogo': False,
                         'dragmode': 'pan',  # Set pan as default mode
+                        'modeBarButtonsToAdd': ['drawline', 'eraseshape'],  # enable drawing
+
                         'modeBarButtonsToRemove': [
                             'downloadPlot',
                             'toImage',
@@ -261,30 +269,28 @@ class OHLCChartCreator:
                         highlighted_timestamps = highlighter.render()
                         current_position = navigator.render()
 
-                        fig = self.create_chart(crypto, highlighted_timestamps, current_position)
+                        fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, current_position)
+
+                        ### hovering- indicator data.
+                        data_box = st.empty()               # the read-out panel
+                        df_plot  = self.df[crypto]          # alias used by the callback
+
                         if fig:
                             st.plotly_chart(
-                                fig, 
-                                use_container_width=True,
-                                config={
-                                    'displayModeBar': True,
-                                    'scrollZoom': True,  # Enable mouse scroll zoom
-                                    'doubleClick': 'reset',  # Double-click to reset zoom
-                                    'showTips': False,
-                                    'displaylogo': False,
-                                    'dragmode': 'pan',  # Set pan as default mode
-                                    'modeBarButtonsToRemove': [
-                                        'downloadPlot',
-                                        'toImage',
-                                        'lasso2d',
-                                        'select2d',
-                                        'zoom2d',         # Remove zoom tool
-                                        'zoomIn2d',       # Remove zoom in button
-                                        'zoomOut2d',      # Remove zoom out button
-                                        'autoScale2d'     # Remove auto scale button
-                                    ]
-                                }
-                            )
+                            fig,
+                            key=f"{crypto}_chart",                # must be unique per chart
+                            use_container_width=True,
+                            config=dict(
+                                displayModeBar=True,
+                                scrollZoom=True,
+                                dragmode="pan",
+                                modeBarButtonsToAdd=["drawline", "eraseshape"],
+                                modeBarButtonsToRemove=[
+                                    'downloadPlot','toImage','lasso2d','select2d',
+                                    'zoom2d','zoomIn2d','zoomOut2d','autoScale2d'
+                                ],
+                            ),
+                        )
 
                             # Display data table
                             with st.expander(f"📋 {crypto} Data Table"):
@@ -304,7 +310,7 @@ class OHLCChartCreator:
                 current_position = navigator.render()
             
                 # CREATE CHART
-                fig = self.create_chart(crypto, highlighted_timestamps, current_position)
+                fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, current_position)
                 if fig:
                     st.plotly_chart(
                         fig, 
@@ -483,8 +489,245 @@ class OHLCChartCreator:
             start_time = data_start
         
         return start_time
+    
+    def _add_unified_hover_overlay(self, fig, df, selected_inds, *, row=1, col=1, mute_candle=True):
+        """
+        Adds an invisible Scatter on the price subplot to provide a single rich hover box
+        (works even if Candlestick lacks hovertemplate). Uses exact column names you provided.
+        """
 
-    def create_chart(self, crypto, highlighted_timestamps=None, chart_position=None) -> go.Figure:
+        # --- Build the list of columns to ship via customdata (order matters)
+        custom_cols = []
+
+        # Always include OHLC
+        base_cols = ["open", "high", "low", "close"]
+        for c in base_cols:
+            if c in df.columns:
+                custom_cols.append(c)
+
+        # RSI
+        if "RSI" in selected_inds and "rsi" in df.columns:
+            custom_cols.append("rsi")
+
+        # Bollinger Band
+        if "Bollinger Band" in selected_inds:
+            for c in ["bb_middle", "bb_upper", "bb_lower"]:
+                if c in df.columns:
+                    custom_cols.append(c)
+
+        # Stochastic sets
+        if "Stochastic" in selected_inds:
+            for c in ["stoch_k", "stoch_d"]:
+                if c in df.columns: custom_cols.append(c)
+        if "Stochastic2" in selected_inds:
+            for c in ["stoch_k2", "stoch_d2"]:
+                if c in df.columns: custom_cols.append(c)
+        if "Stochastic3" in selected_inds:
+            for c in ["stoch_k3", "stoch_d3"]:
+                if c in df.columns: custom_cols.append(c)
+        if "Stochastic4" in selected_inds:
+            for c in ["stoch_k4", "stoch_d4"]:
+                if c in df.columns: custom_cols.append(c)
+
+        # KDJ (%K, %D, %J)
+        if "KDJ" in selected_inds:
+            for c in ["%K", "%D", "%J"]:
+                if c in df.columns: custom_cols.append(c)
+
+        # Williams % Range (WR)
+        if "William % Range" in selected_inds and "WR" in df.columns:
+            custom_cols.append("WR")
+
+        # Build customdata (N x M)
+        cols_data = []
+        for c in custom_cols:
+            # force numeric; strings or None -> NaN
+            s = pd.to_numeric(df[c], errors="coerce")
+            cols_data.append(s.to_numpy(dtype=float))
+        customdata = np.column_stack(cols_data) if cols_data else None
+
+        idx = {c: i for i, c in enumerate(custom_cols)}
+
+        def val(col, fmt):
+            # return a Plotly hovertemplate token like %{customdata[3]:.2f}
+            if col in idx:
+                return f"%{{customdata[{idx[col]}]:{fmt}}}"   # <-- note the ] before :
+            return "n/a"
+        # --- Build the hover box lines
+        lines = [
+            "Time: %{x|%Y-%m-%d %H:%M:%S}",
+            f"Open: {val('open', '.1f')}",
+            f"High: {val('high', '.1f')}",
+            f"Low: {val('low',  '.1f')}",
+            f"Close: {val('close', '.1f')}",
+        ]
+
+        # RSI
+        if "RSI" in selected_inds and "rsi" in idx:
+            lines.append(f"RSI: {val('rsi', '.2f')}")
+
+        # Bollinger Band
+        if "Bollinger Band" in selected_inds:
+            parts = []
+            if "bb_middle" in idx: parts.append(f"M:{val('bb_middle', '.4f')}")
+            if "bb_upper"  in idx: parts.append(f"U:{val('bb_upper',  '.4f')}")
+            if "bb_lower"  in idx: parts.append(f"L:{val('bb_lower',  '.4f')}")
+            if parts: lines.append("BB: " + "  ".join(parts))
+
+        # Stochastic
+        if "Stochastic" in selected_inds:
+            parts = []
+            # if "stoch_k" in idx: parts.append(f"%K:{val('stoch_k', '.2f')}")
+            if "stoch_d" in idx: parts.append(f"%D:{val('stoch_d', '.2f')}")
+            if parts: lines.append("Stoch: " + "  ".join(parts))
+
+        if "Stochastic2" in selected_inds:
+            parts = []
+            # if "stoch_k2" in idx: parts.append(f"%K:{val('stoch_k2', '.2f')}")
+            if "stoch_d2" in idx: parts.append(f"%D:{val('stoch_d2', '.2f')}")
+            if parts: lines.append("Stoch2: " + "  ".join(parts))
+
+        if "Stochastic3" in selected_inds:
+            parts = []
+            # if "stoch_k3" in idx: parts.append(f"%K:{val('stoch_k3', '.2f')}")
+            if "stoch_d3" in idx: parts.append(f"%D:{val('stoch_d3', '.2f')}")
+            if parts: lines.append("Stoch3: " + "  ".join(parts))
+
+        if "Stochastic4" in selected_inds:
+            parts = []
+            # if "stoch_k4" in idx: parts.append(f"%K:{val('stoch_k4', '.2f')}")
+            if "stoch_d4" in idx: parts.append(f"%D:{val('stoch_d4', '.2f')}")
+            if parts: lines.append("Stoch4: " + "  ".join(parts))
+
+        # KDJ
+        if "KDJ" in selected_inds:
+            parts = []
+            if "%K" in idx: parts.append(f"%K:{val('%K', '.2f')}")
+            if "%D" in idx: parts.append(f"%D:{val('%D', '.2f')}")
+            if "%J" in idx: parts.append(f"%J:{val('%J', '.2f')}")
+            if parts: lines.append("KDJ: " + "  ".join(parts))
+
+        # Williams % Range
+        if "William % Range" in selected_inds and "WR" in idx:
+            lines.append(f"W%R: {val('WR', '.2f')}")
+
+        hovertemplate = "<br>".join(lines) + "<extra></extra>"
+
+        # Add the invisible overlay on the PRICE subplot
+        fig.add_trace(
+            go.Scatter(
+                x=df["timestamp"],
+                y=df["close"],                # aligns to candles for hover
+                customdata=customdata,
+                mode="markers",
+                marker=dict(size=8, opacity=0),  # invisible but hoverable
+                hovertemplate=hovertemplate,
+                name="_hover_",
+                showlegend=False,
+                hoverlabel=dict(align="left"),
+            ),
+            row=row, col=col
+        )
+
+        # Optional: silence the candlestick’s own hover to avoid duplicates
+        if mute_candle:
+            for tr in fig.data:
+                if isinstance(tr, go.Candlestick):
+                    tr.update(hoverinfo="skip")
+        
+    def _yref_for_row(self, row_idx: int) -> str:
+        """
+        Plotly yref for row index (1-based): row 1 -> 'y', row 2 -> 'y2', etc.
+        """
+        return 'y' if row_idx == 1 else f'y{row_idx}'
+
+    def _yaxis_name(self, row_idx: int) -> str:
+    # row 1 -> 'yaxis', row 2 -> 'yaxis2', ...
+        return 'yaxis' if row_idx == 1 else f'yaxis{row_idx}'
+
+    def _row_center_in_paper(self, fig, row_idx: int) -> float:
+        # Use the subplot's actual domain from plotly
+        ya = self._yaxis_name(row_idx)
+        dom = getattr(fig.layout, ya).domain  # [y0, y1] in paper coords
+        return (dom[0] + dom[1]) / 2.0
+
+
+    def _add_right_edge_labels(self, fig, crypto, sep_inds):
+        """
+        Put compact value badges OUTSIDE the plot area, vertically centered per subplot.
+        Compatible with custom row_heights.
+        """
+        df = self.df[crypto]
+        if df is None or df.empty:
+            return
+
+        # Space for labels in the margin
+        fig.update_layout(margin=dict(r=150))
+
+        # Helper to get latest non-NaN
+        def latest(col):
+            if col not in df.columns:
+                return None
+            s = pd.to_numeric(df[col], errors="coerce")
+            idx = s.last_valid_index()
+            return None if idx is None else float(s.loc[idx])
+
+        # Which row an indicator is on
+        def row_for_indicator(ind_name: str) -> int:
+            return 1 if ind_name not in sep_inds else sep_inds.index(ind_name) + 2
+
+        # Common kwargs: outside the plot, anchored to right edge, shifted into margin
+        def add_box(row_idx: int, text: str):
+            fig.add_annotation(
+                xref="paper", yref="paper",
+                x=1.0, y=self._row_center_in_paper(fig, row_idx),
+                xanchor="left", yanchor="middle",
+                xshift=12,  # push into the right margin
+                text=text,
+                showarrow=False,
+                bgcolor="#1e222a",
+                bordercolor="#888", borderwidth=1, borderpad=4,
+                font=dict(color="white", size=12),
+                align="left",
+            )
+
+        # ----- Price (row 1)
+        close_val = latest("close")
+        if close_val is not None:
+            add_box(1, f"{close_val:.4f}")
+
+        # ----- Indicators
+        for ind in self.selected_indicators:
+            row = row_for_indicator(ind)
+
+            if ind == "RSI":
+                v = latest("rsi")
+                if v is not None: add_box(row, f"RSI {v:.2f}")
+
+            elif ind == "Bollinger Band":
+                parts = []
+                for label, col in (("U", "bb_upper"), ("M", "bb_middle"), ("L", "bb_lower")):
+                    v = latest(col)
+                    if v is not None: parts.append(f"{label}:{v:.4f}")
+                if parts: add_box(row, "BB " + " ".join(parts))
+
+            elif ind.startswith("Stochastic"):
+                suffix = "" if ind == "Stochastic" else ind.replace("Stochastic", "")
+                v = latest("stoch_d" + suffix)
+                if v is not None: add_box(row, f"%D {v:.2f}")
+
+            elif ind == "KDJ":
+                parts = []
+                for label, col in (("%K", "%K"), ("%D", "%D"), ("%J", "%J")):
+                    v = latest(col)
+                    if v is not None: parts.append(f"{label}:{v:.2f}")
+                if parts: add_box(row, " ".join(parts))
+
+            elif ind == "William % Range":
+                v = latest("WR")
+                if v is not None: add_box(row, f"W%R {v:.2f}")
+
+    def create_chart(self, crypto, indicators, highlighted_timestamps=None, chart_position=None) -> go.Figure:
         """Create OHLC candlestick chart with optional highlighting and navigation"""
         if self.df[crypto] is None or self.df[crypto].empty:
             return None
@@ -515,7 +758,7 @@ class OHLCChartCreator:
                 high=self.df[crypto]['high'],
                 low=self.df[crypto]['low'],
                 close=self.df[crypto]['close'],
-                
+
                 name='Price',
                 increasing_line_color=BULLISH_COLOR,
                 decreasing_line_color=BEARISH_COLOR,
@@ -574,6 +817,13 @@ class OHLCChartCreator:
                 self.df[crypto],
                 1 if ind not in sep_inds else sep_inds.index(ind) + 2
             )
+        
+        # this adds indicator values inside the black box when you hover over candlesticks
+        self._add_unified_hover_overlay(fig, self.df[crypto], self.selected_indicators, row=1, col=1)
+        self._add_right_edge_labels(fig, crypto, sep_inds)
+
+        fig.update_layout(hovermode="x unified")
+
 
         # Update layout
         fig.update_layout(
@@ -586,9 +836,21 @@ class OHLCChartCreator:
             font=dict(color='white'),
             dragmode='pan'  # Set pan as default drag mode in layout
         )
-            
+
+        """ Code for shared hover feature(NOT WORKING YET)"""
+        # keep ranges synced across rows
+        # unify hover and crosshair behavior
+        fig.update_xaxes(matches="x")
+        fig.update_layout(
+            hoversubplots="axis",          # include stacked subplots sharing the x-axis
+            hovermode="x unified",
+        )
+
+        fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor")
+
         if chart_position is not None or highlighted_timestamps or self.states.chart_end is not None:
             print(f"chart_position is {chart_position}, highlighted_timestamps is {highlighted_timestamps}, backtest is {self.states.bt_mode} and chart_end is {self.states.chart_end}")
             self._add_auto_panning(fig, self.df[crypto], chart_position, highlighted_timestamps, self.timeframe, crypto)
             
+
         return fig

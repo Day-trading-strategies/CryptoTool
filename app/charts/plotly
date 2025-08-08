@@ -1,0 +1,82 @@
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas as pd
+import numpy as np
+
+# --- Sample OHLC data ---
+dates = pd.date_range("2024-01-01", periods=50, freq="D")
+openp  = np.random.rand(50) * 10 + 100
+closep = openp + (np.random.rand(50) - 0.5) * 2
+highp  = np.maximum(openp, closep) + np.random.rand(50)
+lowp   = np.minimum(openp, closep) - np.random.rand(50)
+
+# Fake indicators
+rsi = np.random.rand(50) * 100
+stoch = np.random.rand(50) * 100
+
+# --- Create subplots: 1 price chart + 2 indicators ---
+fig = make_subplots(
+    rows=3, cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.02,
+    row_heights=[0.6, 0.2, 0.2],
+    subplot_titles=("Price", "RSI", "Stochastic")
+)
+
+# Row 1: Candlestick
+fig.add_trace(
+    go.Candlestick(
+        x=dates, open=openp, high=highp, low=lowp, close=closep,
+        name="Price"
+    ),
+    row=1, col=1
+)
+
+# Row 2: RSI
+fig.add_trace(
+    go.Scatter(x=dates, y=rsi, name="RSI", line=dict(color="orange")),
+    row=2, col=1
+)
+
+# Row 3: Stochastic
+fig.add_trace(
+    go.Scatter(x=dates, y=stoch, name="Stoch", line=dict(color="green")),
+    row=3, col=1
+)
+
+# --- Unified hover + spikes across all subplots ---
+fig.update_layout(
+    hovermode="x unified",
+    hoversubplots="axis",   # stack hover across subplots sharing x-axis
+    hoverlabel=dict(align="left"),
+    spikedistance=-1,
+    hoverdistance=0,
+    showlegend=False
+)
+
+# Apply spike settings to EVERY x- and y-axis in the figure
+for axis_name in fig.layout:
+    if axis_name.startswith("xaxis"):
+        fig.layout[axis_name].update(
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor",
+            spikethickness=1,
+            spikecolor="white"
+        )
+    if axis_name.startswith("yaxis"):
+        fig.layout[axis_name].update(
+            showspikes=True,
+            spikemode="across",
+            spikesnap="cursor"
+        )
+
+# Optional styling
+fig.update_layout(
+    plot_bgcolor="#111",
+    paper_bgcolor="#111",
+    font=dict(color="white"),
+    height=700
+)
+
+fig.show()

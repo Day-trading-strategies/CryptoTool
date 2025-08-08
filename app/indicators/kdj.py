@@ -56,6 +56,7 @@ class KDJIndicator(Indicator):
                 x=df["timestamp"],
                 y=df["%D"],
                 mode="lines",
+                xaxis="x",
                 line=dict(color="rgba(50,150,255,1)", width=1),
                 name="D",
             ),
