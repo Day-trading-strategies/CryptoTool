@@ -234,19 +234,8 @@ class OHLCChartCreator:
                                 nav[crypto] = chart_end_index
                                 self.states.chart_navigation = nav
                                 
-                                # similar funciton to _add_auto_pan but manual after next button.
-                                # self.states.chart_navigation[crypto] = chart_end_index
-                                # end_time = self.df[crypto].iloc[current_position]['timestamp']
-                                # self.states.chart_end = end_time
-                                # start_time = self._calculate_window_start(end_time, self.timeframe, self.df[crypto])
-                                # fig.update_xaxes(range=[start_time, end_time], type='date')
                                 st.rerun()
-                                # # parse back into a datetime
-                                # self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-                                # chart_end_index = int(self.df[crypto][self.df[crypto]['timestamp'] == self.states.chart_end].index[0])
-                                # self.states.chart_navigation[crypto] = chart_end_index
-                                # match_index = self.df[crypto][self.df[crypto]['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S") == self.states.chart_end.strftime("%Y-%m-%d %H:%M:%S")].index[0]
-                                # st.rerun()
+                               
 
             else:
                 st.error(f"Unable to Backtest Chart")
@@ -390,6 +379,36 @@ class OHLCChartCreator:
                     row=1, col=1
                 )
 
+    def _update_price_yaxis_for_window(self, fig, df, start_time, end_time, *, pad=0.06):
+        """Set y-axis range on the PRICE subplot (row=1,col=1) to the visible x-window."""
+        if start_time is None or end_time is None or df is None or df.empty:
+            return
+
+        # slice the visible window (inclusive)
+        mask = (df["timestamp"] >= start_time) & (df["timestamp"] <= end_time)
+        window = df.loc[mask]
+
+        if window.empty:
+            return
+
+        y_min = float(window["low"].min())
+        y_max = float(window["high"].max())
+
+        # avoid zero-height ranges
+        if not np.isfinite(y_min) or not np.isfinite(y_max):
+            return
+        if y_max <= y_min:
+            eps = max(1e-6, abs(y_max) * 1e-4)
+            y_min -= eps
+            y_max += eps
+
+        # padding so markers / stars don't get cut off
+        span = y_max - y_min
+        y_min -= span * pad
+        y_max += span * pad
+
+        fig.update_yaxes(range=[y_min, y_max], row=1, col=1)
+
     def _add_auto_panning(self, fig, df, chart_position, highlighted_timestamps, timeframe, crypto, start_time=None):
 
         """Auto-pan priority: Navigation > chart_end (hit) > Highlights > None.
@@ -402,6 +421,7 @@ class OHLCChartCreator:
             self.states.chart_end = end_time
             start_time = self._calculate_window_start(end_time, timeframe, df)
             fig.update_xaxes(range=[start_time, end_time], type='date')
+            self._update_price_yaxis_for_window(fig, df, start_time, end_time)
             # Do NOT clear chart_end; it remains stored but ignored while nav is active.
             return
 
@@ -426,6 +446,7 @@ class OHLCChartCreator:
 
             start_time = self._calculate_window_start(end_time, timeframe, df)
             fig.update_xaxes(range=[start_time, end_time], type='date')
+            self._update_price_yaxis_for_window(fig, df, start_time, end_time)
             return
 
         # if nav & chart_end inactive
@@ -480,6 +501,7 @@ class OHLCChartCreator:
         }
         
         tf_minutes = timeframe_minutes.get(timeframe, 60)
+        # Change how many candles you wanna see here.
         time_window_minutes = tf_minutes * 150  # Show ~60 candles
         start_time = end_time - pd.Timedelta(minutes=time_window_minutes)
         
