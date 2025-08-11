@@ -129,30 +129,31 @@ class BacktestSettings:
                             self.end_date,
                             indicator_conditions,
                             self.states)
-            
+
+            progress_text = "Loading Data... Please Wait"
+            my_bar = st.progress(0, text=progress_text)
             # fetches data to do backtest on.
             df = self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 self.states.timeframe, self.states.ob.start_date, self.states.ob.end_date
                 )
-            
-            Fetches data to store for faster transition between timeframes
-            self.data_fetcher.fetch_ohlc_data_range(
-                AVAILABLE_CRYPTOS[self.states.crypto], 
-                '1m', self.states.ob.start_date, self.states.ob.end_date
-                ).to_csv("data/1m_df.csv", index=False)
+            # Fetches data to store for faster transition between timeframes
+            my_bar.progress(30)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '3m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/3m_df.csv", index=False)
+            my_bar.progress(45)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '5m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/5m_df.csv", index=False)
+            my_bar.progress(55)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '15m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/15m_df.csv", index=False)
+            my_bar.progress(60)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1h', self.states.ob.start_date, self.states.ob.end_date
@@ -165,7 +166,11 @@ class BacktestSettings:
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1d', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1d_df.csv", index=False)
-            
+            # self.data_fetcher.fetch_ohlc_data_range(
+            #     AVAILABLE_CRYPTOS[self.states.crypto], 
+            #     '1m', self.states.ob.start_date, self.states.ob.end_date
+            #     ).to_csv("data/1m_df.csv", index=False)
+            my_bar.progress(95)
             if self.selected_indicators != []:
                 print()
                 for ind in self.selected_indicators:
@@ -193,5 +198,7 @@ class BacktestSettings:
             df.to_csv("data/og_backtest.csv", index=False)
             hits = self.states.ob.find_hits(df)
             hits["timestamp"].to_csv("data/filtered_backtest.csv", index=False)
+            my_bar.progress(100)
+            my_bar.empty()
             st.rerun()
 

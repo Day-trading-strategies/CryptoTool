@@ -136,10 +136,10 @@ class Sidebar:
                             "%K Window", 2, 100, 60, key=f"ST_w4"
                         ),
                         "k_smoothing" : st.number_input(
-                            "%K Smoothing", 1, 50, 5,  key=f"ST_ks4"
+                            "%K Smoothing", 1, 50, 10,  key=f"ST_ks4"
                         ),
                         "d_smoothing" : st.number_input(
-                            "%D Smoothing", 1, 50, 3,  key=f"ST_ds4"
+                            "%D Smoothing", 1, 50, 10,  key=f"ST_ds4"
                         )
                     }
 
