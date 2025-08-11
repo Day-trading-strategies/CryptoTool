@@ -22,6 +22,7 @@ class RSIIndicator(Indicator):
             go.Scatter(
                 x=df['timestamp'],
                 y=df['rsi'],
+                xaxis="x",
                 mode='lines',
                 line=dict(width=1),
                 name='RSI (14)',

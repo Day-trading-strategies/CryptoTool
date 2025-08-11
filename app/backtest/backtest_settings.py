@@ -55,7 +55,7 @@ class BacktestSettings:
         timeframe = st.selectbox(
             "Select Timeframe:",
             options=list(TIMEFRAMES.keys()),
-            index=3 # Default to 15min
+            index=3 # Default to 1hr
         )
         self.states.timeframe = timeframe
         
@@ -68,17 +68,17 @@ class BacktestSettings:
             indicator_conditions["RSI_L"] = st.number_input("RSI Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_rsi_l")
 
         if "Stochastic" in self.selected_indicators:
-            indicator_conditions["ST_U"] = st.number_input("Stoch Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u")
-            indicator_conditions["ST_L"] = st.number_input("Stoch Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l")
+            indicator_conditions["ST_U"] = st.number_input("Stoch Upper Bound", 0.0, 100.0, 80.0, step=0.1, key="bt_st_u")
+            indicator_conditions["ST_L"] = st.number_input("Stoch Lower Bound", 0.0, 100.0, 20.0, step=0.1, key="bt_st_l")
         if "Stochastic2" in self.selected_indicators:
-            indicator_conditions["ST_U2"] = st.number_input("Stoch2 Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u2")
-            indicator_conditions["ST_L2"] = st.number_input("Stoch2 Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l2")
+            indicator_conditions["ST_U2"] = st.number_input("Stoch2 Upper Bound", 0.0, 100.0, 80.0, step=0.1, key="bt_st_u2")
+            indicator_conditions["ST_L2"] = st.number_input("Stoch2 Lower Bound", 0.0, 100.0, 20.0, step=0.1, key="bt_st_l2")
         if "Stochastic3" in self.selected_indicators:
-            indicator_conditions["ST_U3"] = st.number_input("Stoch3 Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u3")
-            indicator_conditions["ST_L3"] = st.number_input("Stoch3 Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l3")
+            indicator_conditions["ST_U3"] = st.number_input("Stoch3 Upper Bound", 0.0, 100.0, 80.0, step=0.1, key="bt_st_u3")
+            indicator_conditions["ST_L3"] = st.number_input("Stoch3 Lower Bound", 0.0, 100.0, 20.0, step=0.1, key="bt_st_l3")
         if "Stochastic4" in self.selected_indicators:
-            indicator_conditions["ST_U4"] = st.number_input("Stoch4 Upper Bound", 0.0, 100.0, None, step=0.1, key="bt_st_u4")
-            indicator_conditions["ST_L4"] = st.number_input("Stoch4 Lower Bound", 0.0, 100.0, None, step=0.1, key="bt_st_l4")
+            indicator_conditions["ST_U4"] = st.number_input("Stoch4 Upper Bound", 0.0, 100.0, 80.0, step=0.1, key="bt_st_u4")
+            indicator_conditions["ST_L4"] = st.number_input("Stoch4 Lower Bound", 0.0, 100.0, 20.0, step=0.1, key="bt_st_l4")
 
         # William %R conditions
         if "William % Range" in self.selected_indicators:
@@ -136,7 +136,7 @@ class BacktestSettings:
                 self.states.timeframe, self.states.ob.start_date, self.states.ob.end_date
                 )
             
-            # Fetches data to store for faster transition between timeframes
+            Fetches data to store for faster transition between timeframes
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1m', self.states.ob.start_date, self.states.ob.end_date
@@ -167,6 +167,7 @@ class BacktestSettings:
                 ).to_csv("data/1d_df.csv", index=False)
             
             if self.selected_indicators != []:
+                print()
                 for ind in self.selected_indicators:
                     if ind == "RSI":
                         indicator = RSIIndicator(**self.indicator_params.get("RSI", {}))
@@ -180,6 +181,12 @@ class BacktestSettings:
                         indicator = WilliamsRIndicator(**self.indicator_params.get("William % Range", {}))
                     elif ind == "Stochastic":
                         indicator = StochasticIndicator(**self.indicator_params.get("Stochastic", {}))
+                    elif ind == "Stochastic2":
+                        indicator = StochasticIndicator(**self.indicator_params.get("Stochastic2", {}), suffix="2")
+                    elif ind == "Stochastic3":
+                        indicator = StochasticIndicator(**self.indicator_params.get("Stochastic3", {}), suffix="3")
+                    elif ind == "Stochastic4":
+                        indicator = StochasticIndicator(**self.indicator_params.get("Stochastic4", {}), suffix="4")
 
                     df = indicator.calculate(df)
 

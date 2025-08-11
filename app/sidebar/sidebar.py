@@ -37,10 +37,11 @@ class Sidebar:
     def render_indicators(self):
         #indicator selection
         st.sidebar.subheader("Indicator")
-        self.selected_indicator = st.sidebar.multiselect(
+        self.selected_indicator = sorted(st.sidebar.multiselect(
             "Select Indicator:",
             options=AVAILABLE_INDICATORS
-        )
+        ))
+        
 
     def render_timeframe(self):
         st.sidebar.subheader("Timeframe")
@@ -85,28 +86,65 @@ class Sidebar:
                 "amplitude":     st.sidebar.number_input("HT Amplitude", 2, 50, 5, key="HT_p"),
             }
 
-        # STOCHASTIC PARAMS
-        stochastic_variants = ["Stochastic", "Stochastic2", "Stochastic3", "Stochastic4"]
+        if "Stochastic" in self.selected_indicator:
+                with st.sidebar.expander(f"Stochastic parameters", expanded=False):
 
-        for name in self.selected_indicator:
-            if name in stochastic_variants:
-                # suffix lets each variant keep distinct Streamlit widget keys
-                suffix = "" if name == "Stochastic" else name[-1]
+                    self.indicator_params["Stochastic"] = {
+                        "k_window" : st.number_input(
+                            "%K Window", 2, 100, 9, key=f"ST_w"
+                        ),
+                        "k_smoothing" : st.number_input(
+                            "%K Smoothing", 1, 50, 1,  key=f"ST_ks"
+                        ),
+                        "d_smoothing" : st.number_input(
+                            "%D Smoothing", 1, 50, 3,  key=f"ST_ds"
+                        )
+                    }
+        if "Stochastic2" in self.selected_indicator:
+                with st.sidebar.expander(f"Stochastic2 parameters", expanded=False):
 
-                with st.sidebar.expander(f"{name} parameters", expanded=False):
-                    k_window     = st.number_input(
-                        "%K Window", 2, 100, 14, key=f"ST_w{suffix}"
-                    )
-                    k_smoothing  = st.number_input(
-                        "%K Smoothing", 1, 50, 1,  key=f"ST_ks{suffix}"
-                    )
-                    d_smoothing  = st.number_input(
-                        "%D Smoothing", 1, 50, 3,  key=f"ST_ds{suffix}"
-                    )
+                    self.indicator_params["Stochastic2"] = {
+                        "k_window" : st.number_input(
+                            "%K Window", 2, 100, 14, key=f"ST_w2"
+                        ),
+                        "k_smoothing" : st.number_input(
+                            "%K Smoothing", 1, 50, 1,  key=f"ST_ks2"
+                        ),
+                        "d_smoothing" : st.number_input(
+                            "%D Smoothing", 1, 50, 3,  key=f"ST_ds2"
+                        )
+                    }
+        if "Stochastic3" in self.selected_indicator:
+                with st.sidebar.expander(f"Stochastic3 parameters", expanded=False):
 
-                # store params exactly under the indicator’s own name
-                self.indicator_params[name] = {
-                    "k_window":    k_window,
-                    "k_smoothing": k_smoothing,
-                    "d_smoothing": d_smoothing,
-                }
+                    self.indicator_params["Stochastic3"] = {
+                        "k_window" : st.number_input(
+                            "%K Window", 2, 100, 40, key=f"ST_w3"
+                        ),
+                        "k_smoothing" : st.number_input(
+                            "%K Smoothing", 1, 50, 4,  key=f"ST_ks3"
+                        ),
+                        "d_smoothing" : st.number_input(
+                            "%D Smoothing", 1, 50, 3,  key=f"ST_ds3"
+                        )
+                    }
+        if "Stochastic4" in self.selected_indicator:
+                with st.sidebar.expander(f"Stochastic4 parameters", expanded=False):
+
+                    self.indicator_params["Stochastic4"] = {
+                        "k_window" : st.number_input(
+                            "%K Window", 2, 100, 60, key=f"ST_w4"
+                        ),
+                        "k_smoothing" : st.number_input(
+                            "%K Smoothing", 1, 50, 5,  key=f"ST_ks4"
+                        ),
+                        "d_smoothing" : st.number_input(
+                            "%D Smoothing", 1, 50, 3,  key=f"ST_ds4"
+                        )
+                    }
+
+        
+
+                
+
+                

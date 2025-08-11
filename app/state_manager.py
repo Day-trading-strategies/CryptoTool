@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 
 from app.config import *
 
@@ -16,8 +17,27 @@ class SessionStateManager:
         "ob": None,
         "highlighted_candles": {},
         "chart_navigation": {}, 
-        "previous_timeframes": {},
-        "previous_highlights": {}   
+        "previous_timeframe": None,
+        "previous_highlights": {},
+        "trading_info": {
+            "trade_on": False,
+            "start_price": None,
+            "trade_type": None,
+            "entry_time": None,
+            "take_profit": None,
+            "stop_loss": None,
+            "trading_fee": 0.0,
+            "history": pd.DataFrame(columns=[
+                "entry_time",
+                "result", 
+                "change",
+                "start_price",
+                "stop_loss",
+                "take_profit"
+                ]),
+            "wins": 0,
+            "losses": 0
+        }
     }
     def __init__(self):
         self._initialize_defaults()
@@ -108,12 +128,12 @@ class SessionStateManager:
         st.session_state["chart_navigation"] = value
 
     @property
-    def previous_timeframes(self) -> dict:
-        return st.session_state["previous_timeframes"]
+    def previous_timeframe(self) -> dict:
+        return st.session_state["previous_timeframe"]
     
-    @previous_timeframes.setter
-    def previous_timeframes(self, value: dict):
-        st.session_state["previous_timeframes"] = value
+    @previous_timeframe.setter
+    def previous_timeframe(self, value):
+        st.session_state["previous_timeframe"] = value
     
     @property
     def previous_highlights(self) -> dict:
@@ -122,3 +142,11 @@ class SessionStateManager:
     @previous_highlights.setter
     def previous_highlights(self, value: dict):
         st.session_state["previous_highlights"] = value
+
+    @property
+    def trading_info(self) -> dict:
+        return st.session_state["trading_info"]
+    
+    @trading_info.setter
+    def trading_info(self, value: dict):
+        st.session_state["trading_info"] = value
