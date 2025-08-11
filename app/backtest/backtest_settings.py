@@ -136,7 +136,7 @@ class BacktestSettings:
                 self.states.timeframe, self.states.ob.start_date, self.states.ob.end_date
                 )
             
-            Fetches data to store for faster transition between timeframes
+            # Fetches data to store for faster transition between timeframes
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1m', self.states.ob.start_date, self.states.ob.end_date
