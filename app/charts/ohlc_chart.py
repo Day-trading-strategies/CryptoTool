@@ -296,7 +296,7 @@ class OHLCChartCreator:
                                         change = row["change"]
                                         if result == "win":
                                             # Simple inline color cue
-                                            st.markdown(f"{result}, +{change}")
+                                            st.markdown(f"{result}, {change}")
                                         if result == "loss":
                                             st.markdown(f"{result}, {change}")
 
