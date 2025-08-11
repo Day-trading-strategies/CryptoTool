@@ -136,19 +136,19 @@ class BacktestSettings:
                 self.states.timeframe, self.states.ob.start_date, self.states.ob.end_date
                 )
             
-            # Fetches data to store for faster transition between timeframes
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '1m', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/1m_df.csv", index=False)
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '3m', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/3m_df.csv", index=False)
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '5m', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/5m_df.csv", index=False)
+            Fetches data to store for faster transition between timeframes
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '1m', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/1m_df.csv", index=False)
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '3m', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/3m_df.csv", index=False)
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '5m', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/5m_df.csv", index=False)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '15m', self.states.ob.start_date, self.states.ob.end_date
@@ -157,10 +157,10 @@ class BacktestSettings:
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1h', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1h_df.csv", index=False)
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '4h', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/4h_df.csv", index=False)
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '4h', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/4h_df.csv", index=False)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1d', self.states.ob.start_date, self.states.ob.end_date
