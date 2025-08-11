@@ -70,27 +70,27 @@ class ChartNavigation:
                 st.rerun()
         
         with col6:
-            if st.button("⬅️ Forward 5", 
+            if st.button("➡️ Forward 5", 
                         key=f"nav_forward5{key_suffix}", 
-                        disabled=current_position <= 0,
+                        disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
                 for _ in range(5):
                     self._navigate_forward()
                 st.rerun()
         
         with col7:
-            if st.button("⬅️ Forward 10", 
+            if st.button("➡️ Forward 10", 
                         key=f"nav_forward10{key_suffix}", 
-                        disabled=current_position <= 0,
+                        disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
                 for _ in range(10):
                     self._navigate_forward()
                 st.rerun()
         
         with col8:
-            if st.button("⬅️ Forward 15", 
+            if st.button("➡️ Forward 15", 
                         key=f"nav_forward15{key_suffix}", 
-                        disabled=current_position <= 0,
+                        disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
                 for _ in range(15):
                     self._navigate_forward()

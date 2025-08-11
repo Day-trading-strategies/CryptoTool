@@ -1,7 +1,6 @@
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
-from streamlit_plotly_events import plotly_events
 import pandas as pd
 from datetime import datetime
 import numpy as np
@@ -16,6 +15,7 @@ from app.indicators.kdj import KDJIndicator
 from app.indicators.stochastic import StochasticIndicator
 from app.charts.chart_navigation import ChartNavigation
 from app.charts.candlestick_highlighter import CandlestickHighlighter
+from app.trade_simulator import TradeSimulator
 
 class OHLCChartCreator:
     """Class to create OHLC charts with optional indicators."""
@@ -52,6 +52,7 @@ class OHLCChartCreator:
         </style>""", unsafe_allow_html=True)
 
         st.subheader("📈 OHLC Charts")
+
         if self.states.bt_mode:
             print("bt_mode on")
             crypto = self.states.crypto
@@ -121,7 +122,7 @@ class OHLCChartCreator:
                 adjusted_position = current_position if current_position is not None and current_position <= end_idx else None
                 
                 fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, adjusted_position)
-                self.df[crypto] = temp_df
+                self.df[crypto], temp_df = temp_df, self.df[crypto] 
             else:
                 # create chart with original data (entire dataset)
                 current_position = navigator.navigate_to_latest()
@@ -129,113 +130,177 @@ class OHLCChartCreator:
 
                 fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, current_position)
 
+            simulator = TradeSimulator(fig, crypto, temp_df, self.states)
+            col1, col2 = st.columns([6,1])
 
             if fig:
-                st.plotly_chart(
-                    fig, 
-                    use_container_width=True,
-                    config={
-                        'displayModeBar': True,
-                        'scrollZoom': True,  # Enable mouse scroll zoom
-                        'doubleClick': 'reset',  # Double-click to reset zoom
-                        'showTips': False,
-                        'displaylogo': False,
-                        'dragmode': 'pan',  # Set pan as default mode
-                        'modeBarButtonsToAdd': ['drawline', 'eraseshape'],  # enable drawing
+                with col2:
+                    simulator.render()
 
-                        'modeBarButtonsToRemove': [
-                            'downloadPlot',
-                            'toImage',
-                            'lasso2d',
-                            'select2d',
-                            'zoom2d',         # Remove zoom tool
-                            'zoomIn2d',       # Remove zoom in button
-                            'zoomOut2d',      # Remove zoom out button
-                            'autoScale2d'     # Remove auto scale button
-                        ]
-                    }
-                )
+                with col1:
+                    st.plotly_chart(
+                        fig, 
+                        use_container_width=True,
+                        config={
+                            'displayModeBar': True,
+                            'scrollZoom': True,  # Enable mouse scroll zoom
+                            'doubleClick': 'reset',  # Double-click to reset zoom
+                            'showTips': False,
+                            'displaylogo': False,
+                            'dragmode': 'pan',  # Set pan as default mode
+                            'modeBarButtonsToAdd': ['drawline', 'eraseshape'],  # enable drawing
 
-                hits = pd.read_csv("data/filtered_backtest.csv", parse_dates=["timestamp"])
-                timestamps = hits["timestamp"].tolist()
+                            'modeBarButtonsToRemove': [
+                                'downloadPlot',
+                                'toImage',
+                                'lasso2d',
+                                'select2d',
+                                'zoom2d',         # Remove zoom tool
+                                'zoomIn2d',       # Remove zoom in button
+                                'zoomOut2d',      # Remove zoom out button
+                                'autoScale2d'     # Remove auto scale button
+                            ]
+                        }
+                    )
                 
-                if self.states.chart_end in timestamps:
-                    self.states.hit_index = timestamps.index(self.states.chart_end)
+
+                # Load & clean hits (force datetimes; sort so Next goes chronologically)
+                hits = pd.read_csv("data/filtered_backtest.csv", parse_dates=["timestamp"])
+                hits = hits.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+
+                # Optional: keep this if other UI parts still use it
+                timestamps = hits["timestamp"].tolist()
+
+                # --- Figure out "now" on the chart (priority: manual nav > chart_end > last candle) ---
+                if current_position is not None and 0 <= current_position < len(self.df[crypto]):
+                    ref_time = pd.to_datetime(self.df[crypto].iloc[current_position]["timestamp"])
+                elif self.states.chart_end is not None:
+                    ref_time = pd.to_datetime(self.states.chart_end)
                 else:
-                    self.states.hit_index = 0
+                    ref_time = pd.to_datetime(self.df[crypto]["timestamp"].iloc[-1])
 
-                # render a “Next →” button
-                if timestamps and st.button("Next →", key="next_hit"):
-                    # 1) advance the pointer
-                    self.states.hit_index = (self.states.hit_index + 1) % len(timestamps)
+                # --- Initialize hit_index to the last hit <= ref_time (so Next jumps to the next one) ---
+                if not hits.empty:
+                    mask = hits["timestamp"] <= ref_time
+                    self.states.hit_index = int(hits.index[mask][-1]) if mask.any() else len(hits) - 1
+                else:
+                    self.states.hit_index = None
 
-                    # 2) use the next ts (convert to Timestamp for consistency)
-                    next_ts = pd.to_datetime(timestamps[self.states.hit_index])
-                    self.states.chart_end = next_ts          # store as datetime
+                # -----------------------
+                # Next → button (unchanged logic, but use 'hits' to get the timestamp)
+                # -----------------------
+                if not hits.empty and st.button("Next →", key="next_hit"):
+                    self.states.hit_index = (self.states.hit_index + 1) % len(hits)
+                    next_ts = pd.to_datetime(hits.loc[self.states.hit_index, "timestamp"])
+                    self.states.chart_end = next_ts
 
-                    # 3) find the nearest candle ≤ next_ts
-                    ts_series  = self.df[crypto]["timestamp"]
-                    valid_ts   = ts_series[ts_series <= next_ts]
+                    # snap chart to the nearest candle at or before next_ts
+                    ts_series = self.df[crypto]["timestamp"]
+                    valid_ts  = ts_series[ts_series <= next_ts]
                     if not valid_ts.empty:
                         nearest_ts      = valid_ts.max()
                         chart_end_index = int(ts_series[ts_series == nearest_ts].index[0])
                     else:
-                        chart_end_index = len(ts_series) - 1  # fallback: last candle
+                        chart_end_index = len(ts_series) - 1
 
-                    # 4) save nav pointer
-                    nav_positions            = self.states.chart_navigation
-                    nav_positions[crypto]    = chart_end_index
+                    nav_positions         = self.states.chart_navigation
+                    nav_positions[crypto] = chart_end_index
                     self.states.chart_navigation = nav_positions
 
-                    # 5) keep highlight list in sync
-                    if crypto not in self.states.highlighted_candles:
-                        self.states.highlighted_candles[crypto] = []
-                    # if next_ts not in self.states.highlighted_candles[crypto]:
-                    #     self.states.highlighted_candles[crypto].append(next_ts)
-
                     st.rerun()
+
+                col1, col2 = st.columns([1,1])
+                with col1:
+                                            
+                    try:
+                        filtered = pd.read_csv("data/filtered_backtest.csv")
+                        filtered["timestamp"] = pd.to_datetime(filtered["timestamp"])
+                        # turn timestamps into strings for display
+                        times = filtered["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
+                    except FileNotFoundError:
+                        times = []
+
+                    # Show them in an expander as clickable buttons
+                    with st.expander(f"Found {len(timestamps)} hit points."):
+                        if not times:
+                            st.write("No hits found (or filtered_backtest.csv not present).")
+                        else:
+                            for idx, ts in enumerate(times):
+                                # each timestamp is a button; clicking does nothing for now
+                                if st.button(ts, key=f"hit_btn_{idx}"):
+                                    # store the clicked timestamp
+                                    self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+
+                                    # now do a safe ≤ comparison
+                                    ts_series   = self.df[crypto]["timestamp"]
+                                    desired_end = (
+                                        self.states.chart_end
+                                        if self.states.chart_end is not None
+                                        else ts_series.max()
+                                    )
+                                    valid_ts = ts_series[ts_series <= desired_end]
+
+                                    if not valid_ts.empty:
+                                        nearest_ts      = valid_ts.max()
+                                        chart_end_index = int(ts_series[ts_series == nearest_ts].index[0])
+                                    else:
+                                        chart_end_index = len(ts_series) - 1
+
+                                    # updating chart_position.
+                                    nav = self.states.chart_navigation
+                                    nav[crypto] = chart_end_index
+                                    self.states.chart_navigation = nav
+                                    
+                                    st.rerun()
+                with col2:
+                    trades = self.states.trading_info["history"]
+                    with st.expander(f"Trades List"):
+                        if not trades.empty:
+                            trades["entry_time"] = pd.to_datetime(trades["entry_time"], errors="coerce")
+                            trades = trades.dropna(subset=["entry_time"]).copy()
+
+                            # Precompute a display string and ensure numeric result
+                            trades["entry_time_str"] = trades["entry_time"].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+                            if trades.empty:
+                                st.write("No trades found")
+                            else:
+                                # Iterate rows so we can grab the matching result easily
+                                for idx, row in trades.iterrows():
+                                    col_btn, col_val = st.columns([4, 1])
+
+                                    with col_btn:
+                                        if st.button(row["entry_time_str"], key=f"trade_btn_{idx}"):
+                                            # store the clicked timestamp
+                                            self.states.chart_end = row["entry_time"].to_pydatetime()
+
+                                            # now do a safe ≤ comparison
+                                            ts_series   = self.df[crypto]["timestamp"]
+                                            desired_end = self.states.chart_end if self.states.chart_end is not None else ts_series.max()
+                                            valid_ts    = ts_series[ts_series <= desired_end]
+
+                                            if not valid_ts.empty:
+                                                nearest_ts      = valid_ts.max()
+                                                chart_end_index = int(ts_series[ts_series == nearest_ts].index[0])
+                                            else:
+                                                chart_end_index = len(ts_series) - 1
+
+                                            # updating chart_position.
+                                            nav = self.states.chart_navigation
+                                            nav[crypto] = chart_end_index
+                                            self.states.chart_navigation = nav
+                                            st.rerun()
+
+                                    with col_val:
+                                        result = row["result"]
+                                        change = row["change"]
+                                        if result == "win":
+                                            # Simple inline color cue
+                                            st.markdown(f"{result}, +{change}")
+                                        if result == "loss":
+                                            st.markdown(f"{result}, {change}")
+
                                         
-                try:
-                    filtered = pd.read_csv("data/filtered_backtest.csv")
-                    filtered["timestamp"] = pd.to_datetime(filtered["timestamp"])
-                    # turn timestamps into strings for display
-                    times = filtered["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S").tolist()
-                except FileNotFoundError:
-                    times = []
-
-                # Show them in an expander as clickable buttons
-                with st.expander(f"Found {len(timestamps)} hit points."):
-                    if not times:
-                        st.write("No hits found (or filtered_backtest.csv not present).")
-                    else:
-                        for idx, ts in enumerate(times):
-                            # each timestamp is a button; clicking does nothing for now
-                            if st.button(ts, key=f"hit_btn_{idx}"):
-                                # store the clicked timestamp
-                                self.states.chart_end = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-
-                                # now do a safe ≤ comparison
-                                ts_series   = self.df[crypto]["timestamp"]
-                                desired_end = (
-                                    self.states.chart_end
-                                    if self.states.chart_end is not None
-                                    else ts_series.max()
-                                )
-                                valid_ts = ts_series[ts_series <= desired_end]
-
-                                if not valid_ts.empty:
-                                    nearest_ts      = valid_ts.max()
-                                    chart_end_index = int(ts_series[ts_series == nearest_ts].index[0])
-                                else:
-                                    chart_end_index = len(ts_series) - 1
-
-                                # updating chart_position.
-                                nav = self.states.chart_navigation
-                                nav[crypto] = chart_end_index
-                                self.states.chart_navigation = nav
-                                
-                                st.rerun()
-                               
 
             else:
                 st.error(f"Unable to Backtest Chart")
@@ -257,29 +322,38 @@ class OHLCChartCreator:
                         # Render navigation and highlighting controls
                         highlighted_timestamps = highlighter.render()
                         current_position = navigator.render()
-
                         fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, current_position)
+
+
+                        simulator = TradeSimulator(fig, crypto, self.df[crypto], self.states)
 
                         ### hovering- indicator data.
                         data_box = st.empty()               # the read-out panel
                         df_plot  = self.df[crypto]          # alias used by the callback
 
+                        col1, col2 = st.columns([6, 1])
+
                         if fig:
-                            st.plotly_chart(
-                            fig,
-                            key=f"{crypto}_chart",                # must be unique per chart
-                            use_container_width=True,
-                            config=dict(
-                                displayModeBar=True,
-                                scrollZoom=True,
-                                dragmode="pan",
-                                modeBarButtonsToAdd=["drawline", "eraseshape"],
-                                modeBarButtonsToRemove=[
-                                    'downloadPlot','toImage','lasso2d','select2d',
-                                    'zoom2d','zoomIn2d','zoomOut2d','autoScale2d'
-                                ],
-                            ),
-                        )
+                            with col1:
+                                st.plotly_chart(
+                                fig,
+                                key=f"{crypto}_chart",                # must be unique per chart
+                                use_container_width=True,
+                                config=dict
+                                    (
+                                    displayModeBar=True,
+                                    scrollZoom=True,
+                                    dragmode="pan",
+                                    modeBarButtonsToAdd=["drawline", "eraseshape"],
+                                    modeBarButtonsToRemove=[
+                                        'downloadPlot','toImage','lasso2d','select2d',
+                                        'zoom2d','zoomIn2d','zoomOut2d','autoScale2d'
+                                    ],
+                                    ),
+                                )
+                                
+                            with col2:
+                                simulator.render()
 
                             # Display data table
                             with st.expander(f"📋 {crypto} Data Table"):
@@ -522,7 +596,7 @@ class OHLCChartCreator:
         custom_cols = []
 
         # Always include OHLC
-        base_cols = ["open", "high", "low", "close"]
+        base_cols = ["open", "high", "low", "close", "chg", "chg_pct"]
         for c in base_cols:
             if c in df.columns:
                 custom_cols.append(c)
@@ -577,13 +651,16 @@ class OHLCChartCreator:
             return "n/a"
         # --- Build the hover box lines
         lines = [
-            "Time: %{x|%Y-%m-%d %H:%M:%S}",
             f"Open: {val('open', '.1f')}",
             f"High: {val('high', '.1f')}",
             f"Low: {val('low',  '.1f')}",
-            f"Close: {val('close', '.1f')}",
-        ]
-
+            f"Close: {val('close', '.1f')}"
+            ]
+        
+        if "chg" in idx and "chg_pct" in idx:
+            # sign on absolute, sign on percent; show % symbol
+            lines.append(f"Change: {val('chg_pct', '+.2f')}%")
+            
         # RSI
         if "RSI" in selected_inds and "rsi" in idx:
             lines.append(f"RSI: {val('rsi', '.2f')}")
@@ -684,7 +761,7 @@ class OHLCChartCreator:
             return
 
         # Space for labels in the margin
-        fig.update_layout(margin=dict(r=150))
+        fig.update_layout(margin=dict(r=100))
 
         # Helper to get latest non-NaN
         def latest(col):
@@ -716,7 +793,7 @@ class OHLCChartCreator:
         # ----- Price (row 1)
         close_val = latest("close")
         if close_val is not None:
-            add_box(1, f"{close_val:.4f}")
+            add_box(1, f"${close_val:.1f}")
 
         # ----- Indicators
         for ind in self.selected_indicators:
@@ -764,6 +841,16 @@ class OHLCChartCreator:
         weights = [5] + [1] * len(sep_inds)
         total_weight = sum(weights)
         row_heights = [w/total_weight for w in weights]
+
+        df_local = self.df[crypto]
+        if "chg" not in df_local.columns or "chg_pct" not in df_local.columns:
+            prev_close = pd.to_numeric(df_local["close"], errors="coerce").shift(1)
+            close_now = pd.to_numeric(df_local["close"], errors="coerce")
+            chg = close_now - prev_close
+            # avoid divide-by-zero
+            chg_pct = np.where(prev_close != 0, round((chg / prev_close) * 100.0, 2), np.nan)
+            self.df[crypto]["chg"] = chg
+            self.df[crypto]["chg_pct"] = chg_pct
 
         fig = make_subplots(
             rows=n_rows, cols=1,

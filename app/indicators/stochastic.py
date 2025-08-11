@@ -18,9 +18,9 @@ class StochasticIndicator(Indicator):
 
     def __init__(
         self,
-        k_window: int = 14,
-        k_smoothing: int = 3,
-        d_smoothing: int = 3,
+        k_window,
+        k_smoothing,
+        d_smoothing,
         *,
         suffix: str = "",       # "", "2", "3", or "4"
     ):
