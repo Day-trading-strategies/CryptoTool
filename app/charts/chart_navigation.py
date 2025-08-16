@@ -18,25 +18,27 @@ class ChartNavigation:
         # Handle timeframe changes first
         # self._handle_timeframe_changes()
         current_position = self._get_current_position()
+        st.markdown("<div style='padding-top:0px'></div>", unsafe_allow_html=True)
         st.markdown("**📊 Chart Navigation:**")
+
+
         
-        col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([1, 1, 1, 1, 1, 1, 1, 1 , 2, 1])
-        
+        col1, col2, col3, col4 = st.columns([1,1,1,1])        
         # Create unique button keys
         key_suffix = f"_{self.crypto}"
         if self.tab_idx is not None:
             key_suffix += f"_{self.tab_idx}"
         
-        with col1:
-            if st.button("⬅️ Back 15", 
+        with col4:
+            if st.button("⬅️ 15", 
                         key=f"nav_back15{key_suffix}", 
                         disabled=current_position <= 0,
                         use_container_width=True):
                 for _ in range(15):
                     self._navigate_back()
                 st.rerun()
-        with col2:
-            if st.button("⬅️ Back 10 ", 
+        with col3:
+            if st.button("⬅️ 10 ", 
                         key=f"nav_back10{key_suffix}", 
                         disabled=current_position <= 0,
                         use_container_width=True):
@@ -44,8 +46,8 @@ class ChartNavigation:
                     self._navigate_back()
                 st.rerun()
         
-        with col3:
-            if st.button("⬅️ Back 5", 
+        with col2:
+            if st.button("⬅️ 5", 
                         key=f"nav_back5{key_suffix}", 
                         disabled=current_position <= 0,
                         use_container_width=True):
@@ -53,24 +55,25 @@ class ChartNavigation:
                     self._navigate_back()
                 st.rerun()
         
-        with col4:
-            if st.button("⬅️ Back 1", 
+        with col1:
+            if st.button("⬅️ 1", 
                         key=f"nav_back{key_suffix}", 
                         disabled=current_position <= 0,
                         use_container_width=True):
                 self._navigate_back()
                 st.rerun()
-        
-        with col5:
-            if st.button("➡️ Forward 1", 
+        col1, col2, col3, col4 = st.columns([1,1,1,1])
+
+        with col1:
+            if st.button("➡️ 1", 
                         key=f"nav_forward{key_suffix}", 
                         disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
                 self._navigate_forward()
                 st.rerun()
         
-        with col6:
-            if st.button("➡️ Forward 5", 
+        with col2:
+            if st.button("➡️ 5", 
                         key=f"nav_forward5{key_suffix}", 
                         disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
@@ -78,8 +81,8 @@ class ChartNavigation:
                     self._navigate_forward()
                 st.rerun()
         
-        with col7:
-            if st.button("➡️ Forward 10", 
+        with col3:
+            if st.button("➡️ 10", 
                         key=f"nav_forward10{key_suffix}", 
                         disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
@@ -87,8 +90,8 @@ class ChartNavigation:
                     self._navigate_forward()
                 st.rerun()
         
-        with col8:
-            if st.button("➡️ Forward 15", 
+        with col4:
+            if st.button("➡️ 15", 
                         key=f"nav_forward15{key_suffix}", 
                         disabled=current_position >= len(self.df) - 1,
                         use_container_width=True):
@@ -96,7 +99,8 @@ class ChartNavigation:
                     self._navigate_forward()
                 st.rerun()
         
-        
+        col9, col10 = st.columns([2, 1])
+
         with col9:
             current_candle = self.df.iloc[current_position]
             st.info(f"📍 Position: {current_position + 1}/{len(self.df)} | Time: {current_candle['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
@@ -127,6 +131,7 @@ class ChartNavigation:
             self.states.chart_navigation = nav_positions
     
     def _navigate_forward(self):
+        print("forward navigation clicked")
         """Navigate to next candlestick"""
         nav_positions = self.states.chart_navigation
         if nav_positions[self.crypto] < len(self.df) - 1:

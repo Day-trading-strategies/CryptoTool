@@ -26,21 +26,22 @@ class TradeSimulator:
         key_suffix = f"_{self.crypto}"
 
         # padding above interface
-        st.markdown("<div style='padding-top:200px'></div>", unsafe_allow_html=True)
         
-        self._render_wins_losses()
         # No live trade
         if not self.trading_info["trade_on"]:
+            self._render_wins_losses()
+
             self.trade_type = st.selectbox("Trade Type", ["long", "short"], key=f"trade_type{key_suffix}")
 
             if self.trade_type == "long":
-                self.take_profit = st.number_input("Take Profit", min_value=self.cur_price, step=1.0,key=f"take_profit{key_suffix}")
-                self.stop_loss = st.number_input("Stop Loss", max_value=self.cur_price, key=f"stop_loss{key_suffix}")
+                self.take_profit = st.number_input("Take Profit", value=None, step=0.1,key=f"take_profit{key_suffix}")
+                self.stop_loss = st.number_input("Stop Loss", value=self.cur_low, key=f"stop_loss{key_suffix}")
             if self.trade_type == "short":
-                self.take_profit = st.number_input("Take Profit", max_value=self.cur_price, key=f"take_profit{key_suffix}")
-                self.stop_loss = st.number_input("Stop Loss", min_value=self.cur_price, key=f"stop_loss{key_suffix}")
+                self.take_profit = st.number_input("Take Profit", max_value=self.cur_low, key=f"take_profit{key_suffix}")
+                self.stop_loss = st.number_input("Stop Loss", value=self.cur_high, key=f"stop_loss{key_suffix}")
             
             self.trading_fee = st.number_input("Trading Fee %", max_value=100.0, min_value=0.0, value=0.0, step=0.1, key=f"trading_fee{key_suffix}")
+
             self.render_lines(self.take_profit, self.stop_loss)
 
             if st.button("Make Trade", key=f"start{key_suffix}", use_container_width=True):
@@ -50,17 +51,36 @@ class TradeSimulator:
         # Currently Trading + moved at least 1 candlestick.
         if self.trading_info["trade_on"]:
             self._render_details()
-            self.render_lines(self.take_profit, self.stop_loss)
             if self.entry_time is None:
+                print("entry time was None")
                 self.trading_info["trade_on"] = False
                 st.rerun()
-            if self.entry_time < self.df["timestamp"].iloc[-1]:
-                self._auto_stop()
-                if st.button("Stop Trade", key=f"end{key_suffix}", use_container_width=True):
-                    self._end_trade()
-                    st.rerun()
+            if self.trade_type == "long":
+                new_profit = st.number_input("Take Profit", value=self.take_profit, step=1.0,key=f"take_profit{key_suffix}")
+                new_stop = st.number_input("Stop Loss", value=self.stop_loss, key=f"stop_loss{key_suffix}")
+            if self.trade_type == "short":
+                new_profit = st.number_input("Take Profit", max_value= self.cur_low, value=self.take_profit, key=f"take_profit{key_suffix}")
+                new_stop = st.number_input("Stop Loss", value=self.stop_loss, key=f"stop_loss{key_suffix}")
+
+            if (new_stop is not self.stop_loss) | (new_profit is not self.take_profit):
+                self.entry_time = self.df["timestamp"].iloc[-1]
+                self.trading_info["entry_time"] = self.entry_time
+
+            self.render_lines(new_profit, new_stop)
+            self.stop_loss, self.take_profit = new_stop, new_profit
+            self.trading_info["stop_loss"], self.trading_info["take_profit"] = new_stop, new_profit
+
             
-        if st.button("Reset", key=f"reset{key_suffix}"):
+            if self.entry_time < self.df["timestamp"].iloc[-1]:
+                print(f"entry time is {self.entry_time}, current time is {self.df["timestamp"].iloc[-1]}")
+                self._auto_stop()
+
+            if st.button("Stop Trade", key=f"end{key_suffix}", use_container_width=True):
+                self._end_trade()
+                st.rerun()
+
+
+        if st.button("Reset Trade History", key=f"reset{key_suffix}"):
             self._reset_history()
 
     def _start_trade(self):
@@ -75,55 +95,56 @@ class TradeSimulator:
     def _auto_stop(self):
         # Market Long
         if self.trade_type == "long":
-            if self.cur_high >= self.take_profit:
-                change = round(((self.take_profit - self.start_price)/self.start_price) * 100, 2)
-
+            if self.take_profit is not None and self.cur_high >= self.take_profit:
+                gain = round(((self.take_profit - self.start_price)/self.start_price) * 100, 2)
+                result = "win" if gain - self.trading_fee >= 0 else "loss"
                 print("Price has hit take profit")
-                result = "win" if change - self.trading_fee >= 0 else "loss"
-                self._save_trade(result, change - self.trading_fee)
+                self._save_trade(result, gain - self.trading_fee)
                 self._reset_details()
                 st.rerun()
 
             if self.cur_low <= self.stop_loss:
-                change = round(((self.stop_loss - self.start_price)/self.start_price) * 100, 2)
+                gain = round(((self.stop_loss - self.start_price)/self.start_price) * 100, 2)
+                result = "win" if gain - self.trading_fee >= 0 else "loss"
                 print("Price has hit stop loss")
-                self._save_trade("loss", change - self.trading_fee)
+                self._save_trade(result, gain - self.trading_fee)
                 self._reset_details()
                 st.rerun()
         
         # Market Short
         if self.trade_type == "short":
 
-            if self.cur_low <= self.take_profit:
+            if self.take_profit is not None and self.cur_low <= self.take_profit:
                 # negative is good
-                change = round((self.take_profit - self.start_price)/self.start_price * 100, 2)
+                gain = round((self.take_profit - self.start_price)/self.start_price * 100, 2)
                 print("Price has hit take profit")
-                result = "win" if change + self.trading_fee <= 0 else "loss"
-                self._save_trade(result, (change + self.trading_fee)*(-1))
+                result = "win" if gain + self.trading_fee <= 0 else "loss"
+                self._save_trade(result, (gain + self.trading_fee)*(-1))
                 self._reset_details()
                 st.rerun()
 
             if self.cur_high >= self.stop_loss:
-                change = round((self.stop_loss - self.start_price)/self.start_price * 100, 2)
+                gain = round((self.stop_loss - self.start_price)/self.start_price * 100, 2)
                 print("Price has hit stop loss")
-                self._save_trade("loss", (change + self.trading_fee)*(-1))
+                result = "win" if gain + self.trading_fee <= 0 else "loss"
+                self._save_trade(result, (gain + self.trading_fee)*(-1))
                 self._reset_details()
               
                 st.rerun()
 
     def _end_trade(self):
         self.trading_info["trade_on"] = False
-        change = round((self.cur_price - self.start_price)/self.start_price * 100, 2)
+        gain = round((self.cur_price - self.start_price)/self.start_price * 100, 2)
         if self.trade_type == "long":
-            if change - self.trading_fee >= 0:
-                self._save_trade("win", change - self.trading_fee)
-            if change - self.trading_fee < 0:
-                self._save_trade("loss", change - self.trading_fee)
+            if gain - self.trading_fee >= 0:
+                self._save_trade("win", gain - self.trading_fee)
+            if gain - self.trading_fee < 0:
+                self._save_trade("loss", gain - self.trading_fee)
         if self.trade_type == "short":
-            if change + self.trading_fee >= 0:
-                self._save_trade("loss", change + self.trading_fee)
-            if change + self.trading_fee <=0:
-                self._save_trade("win", change + self.trading_fee)
+            if gain + self.trading_fee >= 0:
+                self._save_trade("loss", (gain + self.trading_fee)*(-1))
+            if gain + self.trading_fee <=0:
+                self._save_trade("win", abs(gain + self.trading_fee))
 
         self._reset_details()
 
@@ -159,10 +180,10 @@ class TradeSimulator:
             """
             )
         
-    def _save_trade(self, result: str, change: float):
+    def _save_trade(self, result: str, gain: float):
         new_trade = {
             "result": result,
-            "change": f"{change}%",
+            "gain": f"{gain}%",
             "entry_time": self.entry_time,
             "start_price": self.start_price,
             "stop_loss": self.stop_loss,
@@ -202,11 +223,11 @@ class TradeSimulator:
             annotation_text=f"Stop Loss", annotation_position="right",
             row=1, col=1)
 
-        if take_profit is None:
+        if take_profit is None and self.trading_info["take_profit"] is not None:
             self.fig.add_hline(y=self.trading_info["take_profit"], line_width=1, line_dash="dot", line_color="#A4EDFF",
                 annotation_text=f"Take Profit", annotation_position="top right",
                 row=1, col=1)
-        else:
+        if self.trading_info["take_profit"] is None and take_profit is not None:
             self.fig.add_hline(y=take_profit, line_width=1, line_dash="dot", line_color="#A4EDFF",
                 annotation_text=f"Take Profit", annotation_position="top right",
                 row=1, col=1)

@@ -39,7 +39,8 @@ class Sidebar:
         st.sidebar.subheader("Indicator")
         self.selected_indicator = sorted(st.sidebar.multiselect(
             "Select Indicator:",
-            options=AVAILABLE_INDICATORS
+            options=AVAILABLE_INDICATORS,
+            default=["Stochastic", "Stochastic4"]
         ))
         
 
