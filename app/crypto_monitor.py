@@ -33,6 +33,25 @@ class CryptoMonitor:
 
     def _setup_page_config(self):
         """Configure Streamlit page settings."""
+        st.markdown("""
+        <style>
+            /* Keep navigation buttons stable */
+            .stButton > button {
+                width: 100%;
+                height: 38px !important;
+                min-height: 38px !important;
+                max-height: 38px !important;
+            }
+
+            /* Prevent column shifting */
+            div[data-testid="column"] {
+                min-height: 50px !important;
+                display: flex;
+                align-items: center;
+            }
+                    
+            
+        </style>""", unsafe_allow_html=True)
         st.title("🚀 Crypto Price Monitor")
         st.markdown("---")
 
@@ -40,17 +59,18 @@ class CryptoMonitor:
             page_title="Crypto Price Monitor",
             page_icon="₿",
             layout="wide",
-            initial_sidebar_state="expanded"
+            initial_sidebar_state="collapsed"
         )
     
     def _initialize_components(self):
         """Initialize all application components."""
+        
         self.data_fetcher = BinanceDataFetcher()
         self.sidebar = Sidebar()
         if not self.sidebar.selected_cryptos:
             st.warning("Please select at least one cryptocurrency to monitor.")
             return
-        self.price_display = PriceSummary(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.data_fetcher)
+        # self.price_display = PriceSummary(self.sidebar.selected_cryptos, self.sidebar.selected_timeframe, self.data_fetcher)
 
         # PREPARE NAVIGATION AND HIGHLIGHTING DATA
         highlighted_timestamps = {}
@@ -67,13 +87,13 @@ class CryptoMonitor:
                 st.session_state[nav_key] = 0  # Start at first candlestick, or use len(df)-1 for latest
             chart_positions[crypto] = st.session_state[nav_key]
 
+        self.backtest_settings = BacktestSettings(self.sidebar.selected_indicator, self.sidebar.selected_timeframe, self.states, self.data_fetcher, self.sidebar.indicator_params)
+
         self.chart_creator = OHLCChartCreator(self.sidebar.selected_cryptos,
                                                self.sidebar.selected_timeframe,
                                                self.data_fetcher,
                                                self.sidebar.selected_indicator,
                                                self.sidebar.indicator_params, self.states, highlighted_timestamps, chart_positions)
-        self.backtest_settings = BacktestSettings(self.sidebar.selected_indicator, self.sidebar.selected_timeframe, self.states, self.data_fetcher, self.sidebar.indicator_params)
-        
     def _render_footer(self):
         # Footer
         st.markdown("---")

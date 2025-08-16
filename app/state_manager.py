@@ -30,14 +30,16 @@ class SessionStateManager:
             "history": pd.DataFrame(columns=[
                 "entry_time",
                 "result", 
-                "change",
+                "gain",
                 "start_price",
                 "stop_loss",
                 "take_profit"
                 ]),
             "wins": 0,
             "losses": 0
-        }
+        },
+        "_tf_change_ctx": {},
+        "_ghost_ts": None,
     }
     def __init__(self):
         self._initialize_defaults()
@@ -150,3 +152,19 @@ class SessionStateManager:
     @trading_info.setter
     def trading_info(self, value: dict):
         st.session_state["trading_info"] = value
+
+    @property
+    def _tf_change_ctx(self) -> dict:
+        return st.session_state["_tf_change_ctx"]
+    
+    @_tf_change_ctx.setter
+    def _tf_change_ctx(self, value: dict):
+        st.session_state["_tf_change_ctx"] = value
+
+    @property
+    def _ghost_ts(self) -> dict:
+        return st.session_state["_ghost_ts"]
+    
+    @_ghost_ts.setter
+    def _tf_change_ctx(self, value: dict):
+        st.session_state["_ghost_ts"] = value

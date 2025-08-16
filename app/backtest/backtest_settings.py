@@ -25,7 +25,7 @@ class BacktestSettings:
 
     def render(self):
         """Render the sidebar components"""
-        with st.expander("Backtesting Settings"):
+        with st.expander("Backtesting Settings", expanded=False):
             self.render_dates()
             self.render_crypto()
             self.render_timeframe()
@@ -47,7 +47,9 @@ class BacktestSettings:
         crypto = st.selectbox(
             "Select Crypto:",
             options=list(AVAILABLE_CRYPTOS.keys()),
-            index=0  # Default to BTC
+            index=None,
+            key="bt_crypto",
+            placeholder="Select a Crypto",
             )
         self.states.crypto = crypto
 
@@ -118,12 +120,11 @@ class BacktestSettings:
                 indicator_conditions["KDJ"] = True
         
 
-        run_bt = st.button("▶ Run Backtest", key="bt_run")
+        run_bt = st.button("▶ Run Backtest", key="bt_run", disabled=self.states.crypto is None)
 
         if run_bt:
-            print(f"self.selected_indicators is {self.selected_indicators}")
-
             self.states.bt_mode = True
+            print(f"crypto is set to {self.states.crypto}")
             self.states.ob = CryptoBacktester(
                             self.start_date,
                             self.end_date,
@@ -140,7 +141,6 @@ class BacktestSettings:
 
             # Fetches data to store for faster transition between timeframes
             my_bar.progress(30)
-            
             # Fetches data to store for faster transition between timeframes
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
@@ -173,13 +173,12 @@ class BacktestSettings:
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1d', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1d_df.csv", index=False)
-            # self.data_fetcher.fetch_ohlc_data_range(
-            #     AVAILABLE_CRYPTOS[self.states.crypto], 
-            #     '1m', self.states.ob.start_date, self.states.ob.end_date
-            #     ).to_csv("data/1m_df.csv", index=False)
+            self.data_fetcher.fetch_ohlc_data_range(
+                AVAILABLE_CRYPTOS[self.states.crypto], 
+                '1m', self.states.ob.start_date, self.states.ob.end_date
+                ).to_csv("data/1m_df.csv", index=False)
             my_bar.progress(95)
             if self.selected_indicators != []:
-                print()
                 for ind in self.selected_indicators:
                     if ind == "RSI":
                         indicator = RSIIndicator(**self.indicator_params.get("RSI", {}))
@@ -202,7 +201,7 @@ class BacktestSettings:
 
                     df = indicator.calculate(df)
 
-            df.to_csv("data/og_backtest.csv", index=False)
+            df.to_csv("data/backtest.csv", index=False)
             hits = self.states.ob.find_hits(df)
             hits["timestamp"].to_csv("data/filtered_backtest.csv", index=False)
             my_bar.progress(100)
