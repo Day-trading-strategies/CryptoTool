@@ -33,10 +33,11 @@ class SessionStateManager:
                 "gain",
                 "start_price",
                 "stop_loss",
-                "take_profit"
+                "take_profit",
                 ]),
             "wins": 0,
-            "losses": 0
+            "losses": 0,
+            "last_adjust_time": None,
         },
         "_tf_change_ctx": {},
         "_ghost_ts": None,
