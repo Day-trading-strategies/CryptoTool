@@ -41,7 +41,7 @@ class OHLCChartCreator:
             col1, col2 = st.columns([6,1])
 
             with col2:
-                st.markdown("<div style='padding-top:350px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='padding-top:400px'></div>", unsafe_allow_html=True)
 
                 self.timeframe = st.selectbox("Select Timeframe",
                             options=TIMEFRAMES.keys(),
@@ -241,7 +241,7 @@ class OHLCChartCreator:
                 # -----------------------
                 # Next → button (unchanged logic, but use 'hits' to get the timestamp)
                 # -----------------------
-                if not hits.empty and st.button("Next →", key="next_hit"):
+                if not hits.empty and st.button("Next →", key="next_hit", use_container_width=True):
                     self.states.hit_index = (self.states.hit_index + 1) % len(hits)
                     next_ts = pd.to_datetime(hits.loc[self.states.hit_index, "timestamp"])
                     self.states.chart_end = next_ts
@@ -307,7 +307,7 @@ class OHLCChartCreator:
                                     st.rerun()
                 with col2:
                     trades = self.states.trading_info["history"]
-                    with st.expander(f"Trades List"):
+                    with st.expander(f"Trades List (From Oldest to Newest"):
                         if not trades.empty:
                             trades["entry_time"] = pd.to_datetime(trades["entry_time"], errors="coerce")
                             trades = trades.dropna(subset=["entry_time"]).copy()

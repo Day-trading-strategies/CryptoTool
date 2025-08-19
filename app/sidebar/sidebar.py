@@ -123,10 +123,10 @@ class Sidebar:
                             "%K Window", 2, 100, 40, key=f"ST_w3"
                         ),
                         "k_smoothing" : st.number_input(
-                            "%K Smoothing", 1, 50, 4,  key=f"ST_ks3"
+                            "%K Smoothing", 1, 50, 3,  key=f"ST_ks3"
                         ),
                         "d_smoothing" : st.number_input(
-                            "%D Smoothing", 1, 50, 3,  key=f"ST_ds3"
+                            "%D Smoothing", 1, 50, 4,  key=f"ST_ds3"
                         )
                     }
         if "Stochastic4" in self.selected_indicator:
@@ -137,7 +137,7 @@ class Sidebar:
                             "%K Window", 2, 100, 60, key=f"ST_w4"
                         ),
                         "k_smoothing" : st.number_input(
-                            "%K Smoothing", 1, 50, 10,  key=f"ST_ks4"
+                            "%K Smoothing", 1, 50, 1,  key=f"ST_ks4"
                         ),
                         "d_smoothing" : st.number_input(
                             "%D Smoothing", 1, 50, 10,  key=f"ST_ds4"

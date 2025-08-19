@@ -15,6 +15,7 @@ class TradeSimulator:
         self.take_profit = states.trading_info["take_profit"]
         self.start_price = states.trading_info["start_price"]
         self.entry_time = states.trading_info["entry_time"]
+        self.last_adjust_time = states.trading_info["last_adjust_time"]
         self.history = states.trading_info["history"]
         self.trading_fee = states.trading_info["trading_fee"]
         self.cur_high = self.df["high"].iloc[-1]
@@ -34,10 +35,10 @@ class TradeSimulator:
             self.trade_type = st.selectbox("Trade Type", ["long", "short"], key=f"trade_type{key_suffix}")
 
             if self.trade_type == "long":
-                self.take_profit = st.number_input("Take Profit", value=None, step=0.1,key=f"take_profit{key_suffix}")
+                self.take_profit = st.number_input("Take Profit", min_value=self.cur_price, step=0.1,key=f"take_profit{key_suffix}")
                 self.stop_loss = st.number_input("Stop Loss", value=self.cur_low, key=f"stop_loss{key_suffix}")
             if self.trade_type == "short":
-                self.take_profit = st.number_input("Take Profit", max_value=self.cur_low, key=f"take_profit{key_suffix}")
+                self.take_profit = st.number_input("Take Profit", max_value=self.cur_price, key=f"take_profit{key_suffix}")
                 self.stop_loss = st.number_input("Stop Loss", value=self.cur_high, key=f"stop_loss{key_suffix}")
             
             self.trading_fee = st.number_input("Trading Fee %", max_value=100.0, min_value=0.0, value=0.0, step=0.1, key=f"trading_fee{key_suffix}")
@@ -59,20 +60,24 @@ class TradeSimulator:
                 new_profit = st.number_input("Take Profit", value=self.take_profit, step=1.0,key=f"take_profit{key_suffix}")
                 new_stop = st.number_input("Stop Loss", value=self.stop_loss, key=f"stop_loss{key_suffix}")
             if self.trade_type == "short":
-                new_profit = st.number_input("Take Profit", max_value= self.cur_low, value=self.take_profit, key=f"take_profit{key_suffix}")
+                new_profit = st.number_input("Take Profit", value=self.take_profit, key=f"take_profit{key_suffix}")
                 new_stop = st.number_input("Stop Loss", value=self.stop_loss, key=f"stop_loss{key_suffix}")
 
-            if (new_stop is not self.stop_loss) | (new_profit is not self.take_profit):
-                self.entry_time = self.df["timestamp"].iloc[-1]
-                self.trading_info["entry_time"] = self.entry_time
+            # when SL/TP is edited
+            if (new_stop != self.stop_loss) or (new_profit != self.take_profit):
+                now_ts = pd.to_datetime(self.df["timestamp"].iloc[-1])
+                self.last_adjust_time = now_ts
+                self.trading_info["last_adjust_time"] = now_ts
 
             self.render_lines(new_profit, new_stop)
             self.stop_loss, self.take_profit = new_stop, new_profit
             self.trading_info["stop_loss"], self.trading_info["take_profit"] = new_stop, new_profit
 
-            
-            if self.entry_time < self.df["timestamp"].iloc[-1]:
-                print(f"entry time is {self.entry_time}, current time is {self.df["timestamp"].iloc[-1]}")
+            # call autostop only after a new candle post-entry or post-adjust
+            current_ts = pd.to_datetime(self.df["timestamp"].iloc[-1])
+            decision_ts_candidates = [t for t in [self.entry_time, self.last_adjust_time] if t is not None]
+            last_decision_ts = max(decision_ts_candidates) if decision_ts_candidates else None
+            if last_decision_ts is not None and current_ts > last_decision_ts:
                 self._auto_stop()
 
             if st.button("Stop Trade", key=f"end{key_suffix}", use_container_width=True):
@@ -160,7 +165,9 @@ class TradeSimulator:
         try:
             win_rate = wins / (wins+losses)
 
-            if win_rate > 0.6:
+            if win_rate > 0.75:
+                st.subheader(f"Win % : {win_rate:.1%} 🔥")
+            elif win_rate > 0.5:
                 st.subheader(f"Win % : {win_rate:.1%} 🤓")
             else:
                 st.subheader(f"Win % : {win_rate:.1%} 🤮")
@@ -172,11 +179,8 @@ class TradeSimulator:
         st.markdown(
             f"""
             **Market:** {self.trade_type}  
-            **Start Price:** {self.trading_info['start_price']}  
-            **Stop Loss:** {self.stop_loss}  
-            **Take Profit:** {self.take_profit}  
-            **Current High:** {self.cur_high}  
-            **Current Low:** {self.cur_low}
+            **Buy Price:** {self.trading_info['start_price']}  
+            **Entry Time:** {self.trading_info['entry_time']}
             """
             )
         
@@ -214,21 +218,26 @@ class TradeSimulator:
         self.trading_info["start_price"] = None
 
     def render_lines(self, take_profit, stop_loss):
-        if stop_loss is None:
-            self.fig.add_hline(y=self.trading_info["stop_loss"], line_width=1, line_dash="dot", line_color="#FF4B4B",
-            annotation_text=f"Stop Loss", annotation_position="right",
-            row=1, col=1)
-        else:
-            self.fig.add_hline(y=stop_loss, line_width=1, line_dash="dot", line_color="#FF4B4B",
-            annotation_text=f"Stop Loss", annotation_position="right",
-            row=1, col=1)
+        # (Optional) avoid stacking duplicate lines on reruns
+        if "shapes" in self.fig.layout and self.fig.layout.shapes:
+            self.fig.update_layout(shapes=[])  # clear previously drawn hlines
 
-        if take_profit is None and self.trading_info["take_profit"] is not None:
-            self.fig.add_hline(y=self.trading_info["take_profit"], line_width=1, line_dash="dot", line_color="#A4EDFF",
-                annotation_text=f"Take Profit", annotation_position="top right",
-                row=1, col=1)
-        if self.trading_info["take_profit"] is None and take_profit is not None:
-            self.fig.add_hline(y=take_profit, line_width=1, line_dash="dot", line_color="#A4EDFF",
-                annotation_text=f"Take Profit", annotation_position="top right",
-                row=1, col=1)
+        # Resolve the y values we should use
+        y_stop = stop_loss if stop_loss is not None else self.trading_info.get("stop_loss")
+        y_tp   = take_profit if take_profit is not None else self.trading_info.get("take_profit")
+
+        if y_stop is not None:
+            self.fig.add_hline(
+                y=y_stop, line_width=1, line_dash="dot", line_color="#FF4B4B",
+                annotation_text="Stop Loss", annotation_position="right",
+                row=1, col=1
+            )
+
+        if y_tp is not None:
+            self.fig.add_hline(
+                y=y_tp, line_width=1, line_dash="dot", line_color="#A4EDFF",
+                annotation_text="Take Profit", annotation_position="right",
+                row=1, col=1
+            )
+
         
