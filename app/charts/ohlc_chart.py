@@ -41,7 +41,7 @@ class OHLCChartCreator:
             col1, col2 = st.columns([6,1])
 
             with col2:
-                st.markdown("<div style='padding-top:400px'></div>", unsafe_allow_html=True)
+                st.markdown("<div style='padding-top:300px'></div>", unsafe_allow_html=True)
 
                 self.timeframe = st.selectbox("Select Timeframe",
                             options=TIMEFRAMES.keys(),
