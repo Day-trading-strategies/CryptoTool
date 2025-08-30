@@ -37,10 +37,16 @@ class SessionStateManager:
                 ]),
             "wins": 0,
             "losses": 0,
+            "evens": 0,
             "last_adjust_time": None,
         },
-        "_tf_change_ctx": {},
+        "_tf_change_ctx": {
+            "prev_tf": None,
+            "old_ts": None,
+            "old_df": None
+        },
         "_ghost_ts": None,
+        "global_last_committed_ts": None,
     }
     def __init__(self):
         self._initialize_defaults()
@@ -167,5 +173,13 @@ class SessionStateManager:
         return st.session_state["_ghost_ts"]
     
     @_ghost_ts.setter
-    def _tf_change_ctx(self, value: dict):
+    def _ghost_ts(self, value: dict):
         st.session_state["_ghost_ts"] = value
+
+    @property
+    def global_last_committed_ts(self):
+        return st.session_state["global_last_committed_ts"]
+    
+    @global_last_committed_ts.setter
+    def global_last_committed_ts(self, value):
+        st.session_state["global_last_committed_ts"] = value

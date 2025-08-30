@@ -75,11 +75,8 @@ class TradeSimulator:
         self.cur_low   = float(self.df["low"].iloc[-1])
         self.cur_price = float(self.df["close"].iloc[-1])
 
-
     def render(self):
         key_suffix = f"_{self.crypto}"
-
-        # padding above interface
         
         # No live trade
         if not self.trading_info["trade_on"]:
@@ -107,13 +104,16 @@ class TradeSimulator:
                 self._start_trade()
                 st.rerun()
 
-        # Currently Trading + moved at least 1 candlestick.
+        # Currently Trading
         if self.trading_info["trade_on"]:
             self._render_details()
+
             if self.entry_time is None:
                 print("entry time was None")
                 self.trading_info["trade_on"] = False
                 st.rerun()
+
+            # Allowing to Edit SL/TP
             if self.trade_type == "long":
                 new_profit = st.number_input("Take Profit", value=self.take_profit, step=1.0, key=f"take_profit{key_suffix}")
                 new_stop = st.number_input("Stop Loss", value=self.stop_loss, key=f"stop_loss{key_suffix}")
@@ -134,6 +134,7 @@ class TradeSimulator:
             # call autostop only after a new candle post-entry or post-adjust
             current_ts = pd.to_datetime(self.df["timestamp"].iloc[-1])
             decision_ts_candidates = [t for t in [self.entry_time, self.last_adjust_time] if t is not None]
+            # grabs the later time of entry_time or last adjusted time.
             last_decision_ts = max(decision_ts_candidates) if decision_ts_candidates else None
 
             if last_decision_ts is not None and current_ts > last_decision_ts:
@@ -155,92 +156,100 @@ class TradeSimulator:
         self.trading_info["entry_time"] = pd.to_datetime(self.df["timestamp"].iloc[-1])
         self.trading_info["trade_on"] = True
 
+    def _net_pct(self, exit_price: float) -> float:
+        """Signed net % P&L including fees. Positive = profit."""
+        raw = (exit_price - self.start_price) / self.start_price * 100.0
+        return (raw - self.trading_fee) if self.trade_type == "long" else (-raw - self.trading_fee)
+
     def _auto_stop(self):
         # Always operate on fresh values
+        print('auto stop activated.')
         self._refresh_market()
 
-        tp = self.take_profit
-        sl = self.stop_loss
+        tp, sl = self.take_profit, self.stop_loss
+        exit_price = None
 
         if self.trade_type == "long":
-            # Take profit first to avoid missing a wick-through
+            # TP first to catch wick-throughs
             if tp is not None and self.cur_high >= tp:
-                gain = round(((tp - self.start_price) / self.start_price) * 100, 2)
-                result = "win" if gain - self.trading_fee >= 0 else "loss"
-                self._save_trade(result, gain - self.trading_fee)
-                self._reset_details()
-                st.rerun()
-                return
-
-            if sl is not None and self.cur_low <= sl:
-                gain = round(((sl - self.start_price) / self.start_price) * 100, 2)
-                result = "win" if gain - self.trading_fee >= 0 else "loss"
-                self._save_trade(result, gain - self.trading_fee)
-                self._reset_details()
-                st.rerun()
-                return
-
-        if self.trade_type == "short":
-            # For shorts, lower is good; check TP on lows first
+                exit_price = tp
+            elif sl is not None and self.cur_low <= sl:
+                exit_price = sl
+        elif self.trade_type == "short":  # short
             if tp is not None and self.cur_low <= tp:
-                raw = round(((self.start_price - tp) / self.start_price) * 100, 2)  # positive if good
-                net = raw - self.trading_fee
-                result = "win" if net >= 0 else "loss"
-                self._save_trade(result, net)
-                self._reset_details()
-                st.rerun()
-                return
+                exit_price = tp
+            elif sl is not None and self.cur_high >= sl:
+                exit_price = sl
 
-            if sl is not None and self.cur_high >= sl:
-                raw = round(((self.start_price - sl) / self.start_price) * 100, 2)  # negative if bad
-                net = raw - self.trading_fee
-                result = "win" if net >= 0 else "loss"
-                self._save_trade(result, net)
-                self._reset_details()
-                st.rerun()
-                return
+        if exit_price is None:
+            return  # nothing to do this tick
+
+        net = self._net_pct(exit_price)
+        threshold = 0.05  # same "even" band as _end_trade
+        if abs(net) < threshold:
+            result = "even"  
+        elif net > 0:
+            result = "win"
+        else:
+            result = "loss"
+
+        self._save_trade(result, round(net, 2))
+        self._reset_details()
+        st.rerun()
 
 
     def _end_trade(self):
+        """ When Shorting, we add trading_fee to the change.
+            When Long, we subtract trading_fee to the change"""
         self.trading_info["trade_on"] = False
-        gain = round((self.cur_price - self.start_price)/self.start_price * 100, 2)
-        if self.trade_type == "long":
-            if gain - self.trading_fee >= 0:
-                self._save_trade("win", gain - self.trading_fee)
-            if gain - self.trading_fee < 0:
-                self._save_trade("loss", gain - self.trading_fee)
-        if self.trade_type == "short":
-            if gain + self.trading_fee >= 0:
-                self._save_trade("loss", (gain + self.trading_fee)*(-1))
-            if gain + self.trading_fee <= 0:
-                self._save_trade("win", abs(gain + self.trading_fee))
+
+        raw = (self.cur_price - self.start_price) / self.start_price * 100.0
+        # Long:  profit = raw - fee
+        # Short: profit = -raw - fee
+        net = (raw - self.trading_fee) if self.trade_type == "long" else (-raw - self.trading_fee)
+
+        # classify BEFORE rounding (keeps threshold precise); 0% counts as win (your current behavior)
+        threshold = 0.05
+        print(net)
+        if abs(net) < threshold:
+            result = "even"
+        elif net > 0:
+            result = "win"
+        else:
+            result = "loss"
+
+        self._save_trade(result, round(net, 2))
         self._reset_details()
 
     def _render_wins_losses(self):
         wins = self.trading_info["wins"]
         losses = self.trading_info["losses"]
+        evens = self.trading_info["evens"]
 
         roi_pct = self._compound_roi_percent()
-    
         col1, col2, col3 = st.columns([1,1,1])
         with col1:
-            st.subheader(f"Wins: {wins}")
+            st.markdown(f"<div style='font-size:{"20px"}'>Wins: {wins}</div>", unsafe_allow_html=True)
         with col2:
-            st.subheader(f"Losses: {losses}")
+            st.markdown(f"<div style='font-size:{"20px"}'>Losses: {losses}</div>", unsafe_allow_html=True)
         with col3:
-            st.subheader(f"ROI: {roi_pct:.2f}%")
+            st.markdown(f"<div style='font-size:{"20px"}'>Evens: {evens}</div>", unsafe_allow_html=True)
 
         # Win rate face
-        try:
-            win_rate = wins / (wins + losses)
-            if win_rate > 0.75:
-                st.subheader(f"Win % : {win_rate:.1%} 🔥")
-            elif win_rate > 0.5:
-                st.subheader(f"Win % : {win_rate:.1%} 🤓")
-            else:
-                st.subheader(f"Win % : {win_rate:.1%} 🤮")
-        except ZeroDivisionError:
-            st.subheader("Win %: 0%")
+        col1, col2 = st.columns([1,1])
+        with col1:
+            try:
+                win_rate = wins / (wins + losses)
+                if win_rate > 0.75:
+                    st.markdown(f"<div style='font-size:{"22px"}'>WR : {win_rate:.1%} 🔥</div>", unsafe_allow_html=True)
+                elif win_rate > 0.5:
+                    st.markdown(f"<div style='font-size:{"22px"}'>WR : {win_rate:.1%} 🤓</div>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<div style='font-size:{"22px"}'>WR : {win_rate:.1%} 🤮</div>", unsafe_allow_html=True)
+            except ZeroDivisionError:
+                st.markdown(f"<div style='font-size:{"26px"}'>WR : 0%</div>", unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"<div style='font-size:{"26px"}'>ROI: {roi_pct:.2f}%</div>", unsafe_allow_html=True)
 
     def _render_details(self):
         st.markdown(
@@ -262,8 +271,10 @@ class TradeSimulator:
         }
         if result == "win":
             self.trading_info["wins"] += 1
-        else:
+        elif result == "loss":
             self.trading_info["losses"] += 1
+        else:
+            self.trading_info["evens"] += 1
             
         hist = self.trading_info["history"]
         hist = pd.concat([hist, pd.DataFrame([new_trade])], ignore_index=True)
@@ -276,6 +287,7 @@ class TradeSimulator:
         self.trading_info["history"] = pd.DataFrame()
         self.trading_info["wins"] = 0
         self.trading_info["losses"] = 0
+        self.trading_info["evens"] = 0
         self.trading_info["entry_time"] = None
         st.rerun()
 
