@@ -20,8 +20,6 @@ class ChartNavigation:
         current_position = self._get_current_position()
         st.markdown("<div style='padding-top:0px'></div>", unsafe_allow_html=True)
         st.markdown("**📊 Chart Navigation:**")
-
-
         
         col1, col2, col3, col4 = st.columns([1,1,1,1])        
         # Create unique button keys
@@ -131,7 +129,7 @@ class ChartNavigation:
             self.states.chart_navigation = nav_positions
     
     def _navigate_forward(self):
-        print("forward navigation clicked")
+        # print("forward navigation clicked")
         """Navigate to next candlestick"""
         nav_positions = self.states.chart_navigation
         if nav_positions[self.crypto] < len(self.df) - 1:

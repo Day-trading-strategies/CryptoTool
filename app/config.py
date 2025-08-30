@@ -10,6 +10,12 @@ AVAILABLE_CRYPTOS = {
     'SOL': 'SOL/USDT'
 }
 
+# Default Indicaators to dipslay
+DEFAULT_INDICATORS = ["Stochastic",
+    "Stochastic2",
+    "Stochastic3",
+    "Stochastic4"]
+
 AVAILABLE_INDICATORS = [
     "Stochastic",
     "Stochastic2",
@@ -45,7 +51,7 @@ SEPARATE_AX_INDICATORS ={
 }
 
 # Chart settings
-CHART_HEIGHT = 1000
+CHART_HEIGHT = 1100
 CACHE_TTL_OHLC = 120  # seconds
 CACHE_TTL_PRICE = 60  # seconds
 AUTO_REFRESH_INTERVAL = 10  # seconds
