@@ -90,17 +90,24 @@ class OHLCChartCreator:
 
             # detects if we changed timeframes, then reasigns chart_position to the timestamp we converted above.
             if prev_tf and prev_tf != self.timeframe:
-                print(f"timeframe switched from {prev_tf} to {self.timeframe} ")
-                # We stored old_ts (from the lower TF) earlier in self.states.chart_end
-                old_ts = pd.to_datetime(self.states.chart_end)
+                
+                if self._tf_minutes(self.timeframe) > self._tf_minutes(prev_tf):
+                    print("new TF higher than old TF")
+                    # We stored old_ts (from the lower TF) earlier in self.states.chart_end
+                    old_ts = pd.to_datetime(self.states.chart_end)
 
+                else:
+                    print("new TF lower than old TF")
+                    old_ts = pd.to_datetime(self.states.last_seen_ts)
+                    
                 # Compute the *new* TF bucket that would contain old_ts (e.g., 4:00 for 15m)
                 bucket_start = self._floor_to_tf_bucket(old_ts, self.timeframe)
-
+                
                 # Now, to avoid spoilers, pick the last COMPLETED higher-TF candle:
                 # i.e., the greatest timestamp strictly < bucket_start (e.g., 3:45)
                 ts_series = pd.to_datetime(self.df[crypto]["timestamp"])
 
+                # grab all the rows which is less than floor of current time. Then grab the max time of that.
                 before = ts_series[ts_series < bucket_start]
                 if not before.empty:
                     snapped_ts = before.max()
@@ -114,8 +121,10 @@ class OHLCChartCreator:
                 nav_map = self.states.chart_navigation
                 nav_map[crypto] = new_idx
                 self.states.chart_navigation = nav_map
-                self.states.chart_end = snapped_ts
-                
+                self.states.chart_end = old_ts
+
+                print(f"timeframe switched from {prev_tf} to {self.timeframe} ")
+
             # Create component instances for backtest
             navigator = ChartNavigation(crypto, self.df[crypto], self.states)
             highlighter = CandlestickHighlighter(crypto, self.df[crypto], self.states)
@@ -126,7 +135,7 @@ class OHLCChartCreator:
             
             with col2:
                 current_position = navigator.render()
-                print(f"current_position is {current_position}")
+                
                 fig = self.create_chart(crypto, self.timeframe, highlighted_timestamps, current_position)
                 self.df[crypto].to_csv("data/display_data.csv", index=False)
 
@@ -186,11 +195,12 @@ class OHLCChartCreator:
                 else:
                     # create chart with original data (entire dataset)
                     current_position = navigator.navigate_to_latest()
-
+                    print('we inside the else statement; aka chart_end was not found and we navigated to latest')
                     fig = self.create_chart(crypto, self.selected_indicators, highlighted_timestamps, current_position)
 
                     simulator = TradeSimulator(fig, crypto, temp_df, self.states)
                     simulator.render()
+                
             if fig:
                 with col1:
                     st.plotly_chart(
@@ -218,6 +228,9 @@ class OHLCChartCreator:
                         }
                     )
                 
+                print(f"current_position is {self.states.chart_navigation[self.states.crypto]}")
+                print(f"chart_end is {self.states.chart_end}")
+                print(f"last_seen_ts is {self.states.last_seen_ts}")
 
                 # Load & clean hits (force datetimes; sort so Next goes chronologically)
                 hits = pd.read_csv("data/filtered_backtest.csv", parse_dates=["timestamp"])
@@ -355,6 +368,8 @@ class OHLCChartCreator:
 
             else:
                 st.error(f"Unable to Backtest Chart")
+
+            
         # Create tabs for each cryptocurrency
         elif len(self.selected_cryptos) > 1:
             tabs = st.tabs(self.selected_cryptos)
@@ -484,7 +499,6 @@ class OHLCChartCreator:
             '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720, '1d': 1440
         }.get(timeframe, 60)
 
-
     def _build_partial_candle_from_lower_tf(self, lower_df: pd.DataFrame,
                                             bucket_start: pd.Timestamp,
                                             seen_until: pd.Timestamp) -> dict | None:
@@ -599,8 +613,7 @@ class OHLCChartCreator:
         """Auto-pan priority: Navigation > chart_end (hit) > Highlights > None.
         NOTE: chart_end is NOT cleared; nav simply takes precedence when present.
         """
-        print(f"chart_end is {self.states.chart_end}")
-        print(f"chart_position is {chart_position}")
+
         # --- 1) Manual navigation (Back/Forward) takes priority ---
         if chart_position is not None and 0 <= chart_position < len(df):
             end_time = df.iloc[chart_position]['timestamp']
@@ -677,6 +690,7 @@ class OHLCChartCreator:
         # print(f"chart_position is {chart_position}, highlighted_timestamps is {highlighted_timestamps}, backtest is {self.states.bt_mode} and chart_end is {self.states.chart_end}")
 
         # --- 4) Nothing to do ---
+
         return
 
     def _calculate_window_start(self, end_time, timeframe, df):
@@ -1104,6 +1118,12 @@ class OHLCChartCreator:
 
         if chart_position is not None or highlighted_timestamps or self.states.chart_end is not None:
             self._add_auto_panning(fig, self.df[crypto], chart_position, highlighted_timestamps, self.timeframe, crypto)
+            # update latest time we've ever seen.
+            tf_adjusted_chart_end = (
+                self.states.chart_end + pd.to_timedelta(self._tf_minutes(self.timeframe), unit="m")
+            )
+            if self.states.last_seen_ts is None or tf_adjusted_chart_end > self.states.last_seen_ts:
+                self.states.last_seen_ts = tf_adjusted_chart_end
             
 
         return fig
