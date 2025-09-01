@@ -1,5 +1,6 @@
 import streamlit as st
 from datetime import datetime, timedelta
+import pandas as pd
 
 from app.backtest.backtester import CryptoBacktester
 from app.indicators.half_trend import HalfTrendIndicator
@@ -34,7 +35,7 @@ class BacktestSettings:
     def render_dates(self):
         self.start_date = st.date_input(
             "Start Date",
-            value=datetime.now().date() - timedelta(days=5),
+            value=datetime.now().date() - timedelta(days=1),
             key="bt_start"
         )
         self.end_date = st.date_input(
@@ -47,7 +48,7 @@ class BacktestSettings:
         crypto = st.selectbox(
             "Select Crypto:",
             options=list(AVAILABLE_CRYPTOS.keys()),
-            index=None,
+            index=0,
             key="bt_crypto",
             placeholder="Select a Crypto",
             )
@@ -124,6 +125,7 @@ class BacktestSettings:
 
         if run_bt:
             self.states.bt_mode = True
+            self.states.chart_navigation[self.states.crypto] = 0
             print(f"crypto is set to {self.states.crypto}")
             self.states.ob = CryptoBacktester(
                             self.start_date,
@@ -134,33 +136,31 @@ class BacktestSettings:
             progress_text = "Loading Data... Please Wait"
             my_bar = st.progress(0, text=progress_text)
             # fetches data to do backtest on.
-            df = self.data_fetcher.fetch_ohlc_data_range(
-                AVAILABLE_CRYPTOS[self.states.crypto], 
-                self.states.timeframe, self.states.ob.start_date, self.states.ob.end_date
-            )
+            
 
             # Fetches data to store for faster transition between timeframes
-            my_bar.progress(30)
+            my_bar.progress(10)
             # Fetches data to store for faster transition between timeframes
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1m_df.csv", index=False)
+            my_bar.progress(30)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '3m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/3m_df.csv", index=False)
-            my_bar.progress(45)
+            my_bar.progress(50)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '5m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/5m_df.csv", index=False)
-            my_bar.progress(55)
+            my_bar.progress(65)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '15m', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/15m_df.csv", index=False)
-            my_bar.progress(60)
+            my_bar.progress(80)
             self.data_fetcher.fetch_ohlc_data_range(
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1h', self.states.ob.start_date, self.states.ob.end_date
@@ -173,11 +173,14 @@ class BacktestSettings:
                 AVAILABLE_CRYPTOS[self.states.crypto], 
                 '1d', self.states.ob.start_date, self.states.ob.end_date
                 ).to_csv("data/1d_df.csv", index=False)
-            self.data_fetcher.fetch_ohlc_data_range(
-                AVAILABLE_CRYPTOS[self.states.crypto], 
-                '1m', self.states.ob.start_date, self.states.ob.end_date
-                ).to_csv("data/1m_df.csv", index=False)
             my_bar.progress(95)
+
+            # df = self.data_fetcher.fetch_ohlc_data_range(
+            #     AVAILABLE_CRYPTOS[self.states.crypto], 
+            #     self.states.timeframe, self.states.ob.start_date, self.states.ob.end_date
+            # )
+            df = pd.read_csv(f"data/{self.states.timeframe}_df.csv", parse_dates=["timestamp"])
+        
             if self.selected_indicators != []:
                 for ind in self.selected_indicators:
                     if ind == "RSI":

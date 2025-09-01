@@ -46,7 +46,7 @@ class SessionStateManager:
             "old_df": None
         },
         "_ghost_ts": None,
-        "global_last_committed_ts": None,
+        "last_seen_ts": None,
     }
     def __init__(self):
         self._initialize_defaults()
@@ -177,9 +177,9 @@ class SessionStateManager:
         st.session_state["_ghost_ts"] = value
 
     @property
-    def global_last_committed_ts(self):
-        return st.session_state["global_last_committed_ts"]
+    def last_seen_ts(self):
+        return st.session_state["last_seen_ts"]
     
-    @global_last_committed_ts.setter
-    def global_last_committed_ts(self, value):
-        st.session_state["global_last_committed_ts"] = value
+    @last_seen_ts.setter
+    def last_seen_ts(self, value):
+        st.session_state["last_seen_ts"] = value
