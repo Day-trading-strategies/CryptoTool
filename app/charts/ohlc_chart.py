@@ -279,6 +279,9 @@ class OHLCChartCreator:
 
                         st.rerun()
 
+                    if st.button("Reset Last Seen TS", key="reset_last_seen", use_container_width=True):
+                        self.states.last_seen_ts = self.states.chart_end
+
                 col1, col2 = st.columns([1,1])
                 with col1:
                                             
@@ -365,13 +368,15 @@ class OHLCChartCreator:
                                         gain = row["gain"]
                                         st.markdown(f"{result}, {gain}")
                                 
-
+                    if st.button("Reset Trade History", key="reset"):
+                        simulator.reset_history()
             else:
                 st.error(f"Unable to Backtest Chart")
 
             
         # Create tabs for each cryptocurrency
         elif len(self.selected_cryptos) > 1:
+
             tabs = st.tabs(self.selected_cryptos)
             for idx, crypto in enumerate(self.selected_cryptos):
                 with tabs[idx]:
@@ -429,6 +434,7 @@ class OHLCChartCreator:
                                 st.dataframe(self.df[crypto].tail(10).iloc[::-1], use_container_width=True)
                     else:
                         st.error(f"Unable to load chart for {crypto}")
+        
         else:
             crypto = self.selected_cryptos[0]
             self.df[crypto] = self.data_fetcher.fetch_ohlc_data(AVAILABLE_CRYPTOS[crypto], self.timeframe)

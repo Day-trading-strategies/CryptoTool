@@ -125,6 +125,7 @@ class BacktestSettings:
 
         if run_bt:
             self.states.bt_mode = True
+            self.states.last_seen_ts = None
             self.states.chart_navigation[self.states.crypto] = 0
             print(f"crypto is set to {self.states.crypto}")
             self.states.ob = CryptoBacktester(

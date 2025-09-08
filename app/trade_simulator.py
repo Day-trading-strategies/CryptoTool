@@ -144,8 +144,6 @@ class TradeSimulator:
                 self._end_trade()
                 st.rerun()
 
-        if st.button("Reset Trade History", key=f"reset{key_suffix}"):
-            self._reset_history()
 
     def _start_trade(self):
         self.trading_info["trade_type"] = self.trade_type
@@ -283,7 +281,7 @@ class TradeSimulator:
         self.trading_info["history"] = hist
         self.trading_info["history"].to_csv("data/trading_history.csv")
 
-    def _reset_history(self):
+    def reset_history(self):
         self.trading_info["history"] = pd.DataFrame()
         self.trading_info["wins"] = 0
         self.trading_info["losses"] = 0
