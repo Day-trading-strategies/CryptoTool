@@ -1,4 +1,4 @@
-# Crypto Price Monitor
+# Crypto Day Trading Simulator
 
 Interactive crypto charts, indicators, backtesting, and a lightweight trade simulator — built with Streamlit, Plotly, Pandas, and CCXT. Entry point is [main.py](main.py); the primary app logic lives in [app/crypto_monitor.py](app/crypto_monitor.py).
 
